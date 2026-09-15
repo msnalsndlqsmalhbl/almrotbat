@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>تسجيل الدخول | مصنع الصندل</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body class="login-body">
+
+<div class="login-wrapper">
+  <div class="login-brand">
+    <div class="brand-icon">🏭</div>
+    <h1>مصنع الصندل</h1>
+    <p>نظام المرتبات والإدارة المالية</p>
+  </div>
+
+  <form id="loginForm" class="login-card">
+    <h2>تسجيل الدخول</h2>
+    <p class="muted">أدخل بياناتك للوصول للنظام</p>
+
+    <label class="field">
+      <span>البريد الإلكتروني</span>
+      <input type="email" id="email" required autocomplete="email" placeholder="example@factory.com">
+    </label>
+
+    <label class="field">
+      <span>كلمة المرور</span>
+      <input type="password" id="password" required autocomplete="current-password" placeholder="••••••••">
+    </label>
+
+    <button type="submit" class="btn btn-primary btn-lg" id="loginBtn">
+      🔐 دخول
+    </button>
+
+    <div id="loginMsg" class="login-msg"></div>
+  </form>
+
+  <p class="login-footer">© 2026 مصنع الصندل — جميع الحقوق محفوظة</p>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="auth.js"></script>
+<script>
+  document.getElementById('loginForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('loginBtn');
+    const msg = document.getElementById('loginMsg');
+    btn.disabled = true; btn.textContent = '⏳ جاري الدخول...';
+    msg.textContent = '';
+    const { error } = await sb.auth.signInWithPassword({
+      email: document.getElementById('email').value.trim(),
+      password: document.getElementById('password').value
+    });
+    if (error) {
+      msg.textContent = '❌ ' + (error.message || 'فشل تسجيل الدخول');
+      msg.style.color = '#dc2626';
+      btn.disabled = false; btn.textContent = '🔐 دخول';
+    } else {
+      window.location.href = 'index.html';
+    }
+  });
+</script>
+</body>
+</html>
