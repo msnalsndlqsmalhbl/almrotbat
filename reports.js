@@ -1,8 +1,12 @@
 // ============================================
-// 🏭 مصنع الصندل - Reports Module
+// 🏭 مصنع الصندل - Reports Module (الإصدار 3.1)
 // ============================================
 
 const Reports = {
+  
+  // ============================================
+  // الواجهة الرئيسية
+  // ============================================
   async render() {
     const today = new Date().toISOString().slice(0, 10);
     const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10);
@@ -98,6 +102,9 @@ const Reports = {
     this.generate();
   },
 
+  // ============================================
+  // التقرير العام
+  // ============================================
   async generate() {
     const from = $('#repFrom').value;
     const to = $('#repTo').value;
@@ -113,7 +120,9 @@ const Reports = {
       .lte('end_date', to)
       .order('start_date', { ascending: false });
     if (deptId) q = q.eq('department_id', deptId);
-    if (!Auth.isAdmin() && Auth.currentProfile?.department_id) q = q.eq('department_id', Auth.currentProfile.department_id);
+    if (!Auth.isAdmin() && Auth.currentProfile?.department_id) {
+      q = q.eq('department_id', Auth.currentProfile.department_id);
+    }
     
     const { data: files } = await q;
     if (!files?.length) {
@@ -237,6 +246,9 @@ const Reports = {
     window._printPayrollDedMap = dedMap;
   },
 
+  // ============================================
+  // معاينة الطباعة
+  // ============================================
   async renderPrint(id, paperSize) {
     Modal.close();
     setTimeout(async () => {
@@ -533,7 +545,7 @@ const Reports = {
   },
 
   // ============================================
-  // طباعة
+  // الطباعة الفعلية
   // ============================================
   print(paperSize = 'A4') {
     const content = $('#printArea')?.innerHTML;
@@ -564,7 +576,7 @@ const Reports = {
   },
 
   // ============================================
-  // كشف الموظف
+  // كشف حساب موظف
   // ============================================
   async employeeStatement(id) {
     const { data: e } = await sb.from('employees').select('*, departments(name), employee_types(name)').eq('id', id).single();
@@ -588,6 +600,7 @@ const Reports = {
           <h1 style="margin:6px 0;color:#4338ca">${esc(factoryName)}</h1>
           <h2 style="margin:6px 0;color:#333">كشف حساب موظف</h2>
         </div>
+        
         <div style="background:linear-gradient(135deg,#eef2ff,#f5f3ff);border-radius:12px;padding:18px;margin-bottom:20px">
           <table style="width:100%;font-size:13px;border-collapse:collapse">
             <tr>
@@ -598,10 +611,15 @@ const Reports = {
             <tr>
               <td style="padding:6px"><b>المسمى:</b> ${esc(e.job_title || '-')}</td>
               <td style="padding:6px"><b>الأساسي:</b> ${fmt(e.base_salary, e.currency)}</td>
+              <td style="padding:6px"><b>نوع الراتب:</b> ${e.salary_type === 'daily' ? '📆 يومي' : '📅 شهري'}</td>
+            </tr>
+            <tr>
               <td style="padding:6px"><b>التعيين:</b> ${fmtDate(e.hire_date)}</td>
+              <td style="padding:6px" colspan="2"><b>الحالة:</b> ${e.status === 'active' ? '✅ نشط' : '🚫 منتهي'}</td>
             </tr>
           </table>
         </div>
+        
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px">
           <div style="background:#d1fae5;padding:14px;border-radius:10px;text-align:center">
             <div style="font-size:11px;color:#065f46;font-weight:700">حضور</div>
@@ -620,6 +638,7 @@ const Reports = {
             <div style="font-size:22px;font-weight:900;color:#991b1b">${e.warnings_count || 0}</div>
           </div>
         </div>
+        
         <h3 style="color:#4338ca">💵 الرواتب (${(pays || []).length})</h3>
         <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:20px">
           <thead>
@@ -639,6 +658,7 @@ const Reports = {
             </tr>`).join('') : '<tr><td colspan="4" style="text-align:center;padding:12px;color:#999">لا يوجد</td></tr>'}
           </tbody>
         </table>
+        
         <h3 style="color:#92400e">💳 السلف (${(loans || []).length})</h3>
         <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:20px">
           <thead>
@@ -658,8 +678,27 @@ const Reports = {
             </tr>`).join('') : '<tr><td colspan="4" style="text-align:center;padding:12px;color:#999">لا يوجد</td></tr>'}
           </tbody>
         </table>
+        
+        <h3 style="color:#dc2626">🚨 الإنذارات (${(warns || []).length})</h3>
+        <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:20px">
+          <thead>
+            <tr style="background:#fee2e2">
+              <th style="border:1px solid #ddd;padding:8px;text-align:right">التاريخ</th>
+              <th style="border:1px solid #ddd;padding:8px;text-align:right">السبب</th>
+              <th style="border:1px solid #ddd;padding:8px;text-align:right">الحالة</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${(warns || []).length ? (warns || []).map(w => `<tr>
+              <td style="border:1px solid #e5e7eb;padding:7px">${fmtDate(w.warning_date)}</td>
+              <td style="border:1px solid #e5e7eb;padding:7px">${esc(w.description || w.reason)}</td>
+              <td style="border:1px solid #e5e7eb;padding:7px">${w.is_active ? 'نشط' : 'ملغى'}</td>
+            </tr>`).join('') : '<tr><td colspan="3" style="text-align:center;padding:12px;color:#999">لا يوجد</td></tr>'}
+          </tbody>
+        </table>
+        
         <div style="background:linear-gradient(135deg,#f0fdf4,#ecfdf5);padding:18px;border-radius:12px;border-right:5px solid #10b981">
-          <b style="font-size:15px;color:#065f46">📊 الملخص</b><br><br>
+          <b style="font-size:15px;color:#065f46">📊 الملخص المالي</b><br><br>
           <div style="display:flex;justify-content:space-between;padding:6px 0"><span>إجمالي المستلم:</span><b>${fmt(totalReceived, e.currency)}</b></div>
           <div style="display:flex;justify-content:space-between;padding:6px 0"><span>إجمالي السلف:</span><b>${fmt(totalLoans, e.currency)}</b></div>
           <div style="display:flex;justify-content:space-between;padding:6px 0;color:#991b1b"><span>المتبقي من السلف:</span><b>${fmt(remLoans, e.currency)}</b></div>
@@ -672,6 +711,9 @@ const Reports = {
     `, { size: 'lg' });
   },
 
+  // ============================================
+  // تصدير Excel
+  // ============================================
   async exportExcel(title, headers, rows) {
     let csv = '\uFEFF' + headers.join(',') + '\n';
     rows.forEach(r => {

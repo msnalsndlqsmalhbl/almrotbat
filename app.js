@@ -1,12 +1,17 @@
 // ============================================
-// 🏭 مصنع الصندل - Main App
+// 🏭 مصنع الصندل - Main App (الإصدار 3.2)
+// الجزء 1: الأساسيات + الموظفون + الأقسام + الحضور
 // ============================================
 
 const $ = (sel, root=document) => root.querySelector(sel);
 const $$ = (sel, root=document) => [...root.querySelectorAll(sel)];
 
+// ============================================
+// دوال مساعدة
+// ============================================
 function toast(msg, type='success') {
   const c = $('#toast-container');
+  if (!c) return;
   const el = document.createElement('div');
   el.className = 'toast ' + type;
   el.textContent = msg;
@@ -38,79 +43,44 @@ function getWarningLevel(count, max = 3) {
   return { level: 'low', color: 'warning', icon: '🟡', label: 'تحذير شفهي' };
 }
 
-// ✅ حساب صافي الموظف مع خصم الغياب التلقائي
+// ✅ حساب صافي الموظف باستخدام RPC
 async function calcEmployeeNet(recordId) {
-  const { data: r } = await sb.from('payroll_records').select('*').eq('id', recordId).single();
-  if (!r) return null;
+  const { data, error } = await sb.rpc('calc_employee_payroll', { p_record_id: recordId });
   
-  const { data: file } = await sb.from('payroll_files').select('*').eq('id', r.payroll_file_id).single();
+  if (error || !data?.success) {
+    console.error('Calc error:', error || data?.error);
+    return null;
+  }
   
-  const [earns, deds] = await Promise.all([
+  const [recordRes, earnsRes, dedsRes] = await Promise.all([
+    sb.from('payroll_records').select('*, payroll_files(*)').eq('id', recordId).single(),
     sb.from('payroll_earnings').select('*, earning_types(name)').eq('payroll_record_id', recordId),
     sb.from('payroll_deductions').select('*, deduction_types(name)').eq('payroll_record_id', recordId)
   ]);
   
-  const earnSum = (earns.data||[]).reduce((s,e)=>s+Number(e.amount||0),0);
-  const dedSum = (deds.data||[]).reduce((s,d)=>s+Number(d.amount||0),0);
-  
-  let absenceDays = 0;
-  let unexcusedDays = 0;
-  let excusedDays = 0;
-  let sickDays = 0;
-  let presentDays = 0;
-  let absenceDeduction = 0;
-  
-  if (file?.attendance_file_id) {
-    const { data: attRecords } = await sb.from('attendance_records')
-      .select('*')
-      .eq('file_id', file.attendance_file_id)
-      .eq('employee_id', r.employee_id);
-    
-    (attRecords || []).forEach(a => {
-      if (a.status === 'present') presentDays++;
-      else if (a.status === 'absent') {
-        absenceDays++;
-        if (a.absence_type === 'unexcused') unexcusedDays++;
-        else if (a.absence_type === 'excused') excusedDays++;
-        else if (a.absence_type === 'sick') sickDays++;
-      }
-    });
-    
-    const dailyWage = Number(r.base_salary || 0) / 30;
-    absenceDeduction = dailyWage * unexcusedDays;
-  } else {
-    absenceDeduction = Number(r.absence_deduction || 0);
-    absenceDays = Number(r.absence_days || 0);
-    unexcusedDays = absenceDays;
-  }
-  
-  await sb.from('payroll_records').update({
-    absence_deduction: absenceDeduction,
-    absence_days: absenceDays
-  }).eq('id', recordId);
-  
-  const totalEarnings = Number(r.base_salary||0) + earnSum;
-  const net = totalEarnings - dedSum - absenceDeduction;
+  const r = recordRes.data;
+  const file = r?.payroll_files;
   
   return {
     record: r,
     file,
-    earnings: earns.data||[],
-    deductions: deds.data||[],
-    earnSum,
-    dedSum,
-    totalEarnings,
-    totalDeductions: dedSum,
-    absenceDeduction,
-    net,
+    earnings: earnsRes.data || [],
+    deductions: dedsRes.data || [],
+    earnSum: data.earnings_sum,
+    dedSum: data.deductions_sum,
+    totalEarnings: data.total_earnings,
+    totalDeductions: data.deductions_sum,
+    absenceDeduction: data.absence_deduction,
+    net: data.net_salary,
     attendance: {
-      presentDays,
-      absenceDays,
-      unexcusedDays,
-      excusedDays,
-      sickDays,
-      dailyWage: Number(r.base_salary || 0) / 30
-    }
+      presentDays: data.attendance.present,
+      absenceDays: data.attendance.absent,
+      unexcusedDays: data.attendance.unexcused,
+      excusedDays: data.attendance.excused,
+      sickDays: data.attendance.sick,
+      dailyWage: data.attendance.daily_wage
+    },
+    salaryType: data.salary_type
   };
 }
 
@@ -121,6 +91,9 @@ async function notifyUser(title, message, type='info') {
   } catch (e) { console.warn('notify failed:', e); }
 }
 
+// ============================================
+// Modal Manager
+// ============================================
 const Modal = {
   open(title, bodyHtml, footerHtml='', opts={}) {
     const root = $('#modalRoot');
@@ -158,6 +131,9 @@ function stat(icon, label, value, cls='primary') {
   return `<div class="stat ${cls}"><div class="ico">${icon}</div><div><div class="label">${label}</div><div class="value">${value}</div></div></div>`;
 }
 
+// ============================================
+// Theme Manager
+// ============================================
 const Theme = {
   init() {
     const saved = localStorage.getItem('theme') || 'light';
@@ -174,6 +150,9 @@ const Theme = {
   }
 };
 
+// ============================================
+// Cache Manager
+// ============================================
 const Cache = {
   departments: null, employeeTypes: null, earningTypes: null, deductionTypes: null, settings: null,
   async load() {
@@ -195,17 +174,26 @@ const Cache = {
   getSetting(k, def='') { return this.settings?.[k] ?? def; }
 };
 
+// ============================================
+// Dashboard
+// ============================================
 const Dashboard = {
   async render() {
     const page = $('#pageContent');
     page.innerHTML = `<div class="page-header"><h1>🏠 الرئيسية</h1><p>جاري التحميل...</p></div>`;
+    
     const profile = Auth.currentProfile || { full_name: 'مستخدم', role: 'dept_manager' };
     const hour = new Date().getHours();
     const greet = hour < 12 ? 'صباح الخير' : 'مساء الخير';
-    const [empCount, presentToday, absentToday, payrollMonth, loansActive, treasuries, openFiles, warnsActive, unreadNotif] = await Promise.all([
+    const today = new Date().toISOString().slice(0,10);
+    
+    const [
+      empCount, presentToday, absentToday, payrollMonth,
+      loansActive, treasuries, openFiles, warnsActive, unreadNotif
+    ] = await Promise.all([
       sb.from('employees').select('id', {count:'exact', head:true}).is('deleted_at', null).eq('status','active'),
-      sb.from('attendance_records').select('id',{count:'exact',head:true}).eq('attendance_date', new Date().toISOString().slice(0,10)).eq('status','present'),
-      sb.from('attendance_records').select('id',{count:'exact',head:true}).eq('attendance_date', new Date().toISOString().slice(0,10)).eq('status','absent'),
+      sb.from('attendance_records').select('id',{count:'exact',head:true}).eq('attendance_date', today).eq('status','present'),
+      sb.from('attendance_records').select('id',{count:'exact',head:true}).eq('attendance_date', today).eq('status','absent'),
       sb.from('payroll_files').select('total_net').eq('status','paid').gte('paid_at', new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString()),
       sb.from('loans').select('remaining_amount').eq('status','active'),
       sb.from('treasuries').select('type,current_balance'),
@@ -213,15 +201,18 @@ const Dashboard = {
       sb.from('employee_warnings').select('id',{count:'exact',head:true}).eq('is_active', true),
       sb.from('notifications').select('id',{count:'exact',head:true}).eq('user_id', Auth.currentUser.id).eq('is_read', false)
     ]);
+    
     const monthSalaries = (payrollMonth.data || []).reduce((a,b) => a + Number(b.total_net||0), 0);
     const loansRemaining = (loansActive.data || []).reduce((a,b) => a + Number(b.remaining_amount||0), 0);
     const cashBalance = (treasuries.data||[]).filter(t=>t.type==='cash').reduce((a,b)=>a+Number(b.current_balance||0),0);
     const bankBalance = (treasuries.data||[]).filter(t=>t.type==='bank').reduce((a,b)=>a+Number(b.current_balance||0),0);
+    
     const badge = $('#notifBadge');
     if (badge) {
       if (unreadNotif.count > 0) { badge.textContent = unreadNotif.count; badge.style.display = 'inline-block'; }
       else badge.style.display = 'none';
     }
+    
     page.innerHTML = `
       <div class="page-header"><h1>${greet}، ${esc(profile.full_name || 'مستخدم')} 👋</h1><p>نظرة عامة على حالة المصنع</p></div>
       <div class="grid grid-4">
@@ -251,8 +242,12 @@ const Dashboard = {
   }
 };
 
+// ============================================
+// Employees
+// ============================================
 const Employees = {
   _cache: [],
+  
   async render() {
     $('#pageContent').innerHTML = `
       <div class="page-header">
@@ -261,8 +256,14 @@ const Employees = {
       </div>
       <div class="table-wrap">
         <div class="table-toolbar">
-          <input class="grow" id="empSearch" placeholder="🔎 ابحث...">
+          <input class="grow" id="empSearch" placeholder="🔎 ابحث بالاسم أو الرقم...">
           <select id="empDeptFilter"><option value="">كل الأقسام</option>${Cache.departments.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join('')}</select>
+          <select id="empTypeFilter">
+            <option value="">كل الأنواع</option>
+            <option value="monthly">📅 شهري</option>
+            <option value="weekly">📊 أسبوعي</option>
+            <option value="daily">📆 يومي</option>
+          </select>
           <select id="empStatusFilter"><option value="active">نشط</option><option value="">الكل</option><option value="terminated">منتهي</option></select>
         </div>
         <div class="table-scroll" id="empTableWrap"></div>
@@ -270,45 +271,64 @@ const Employees = {
     await this.load();
     $('#empSearch').oninput = () => this.renderTable();
     $('#empDeptFilter').onchange = () => this.renderTable();
+    $('#empTypeFilter').onchange = () => this.renderTable();
     $('#empStatusFilter').onchange = () => this.renderTable();
   },
+  
   async load() {
     let q = sb.from('employees').select('*, departments(name), employee_types(name)').is('deleted_at', null).order('employee_number');
-    if (!Auth.isAdmin() && Auth.currentProfile?.department_id) q = q.eq('department_id', Auth.currentProfile.department_id);
+    if (!Auth.isAdmin() && Auth.currentProfile?.department_id) {
+      q = q.eq('department_id', Auth.currentProfile.department_id);
+    }
     const { data, error } = await q;
     if (error) { toast('خطأ: ' + error.message, 'error'); return; }
     this._cache = data || [];
     this.renderTable();
   },
+  
   renderTable() {
     const search = $('#empSearch')?.value.toLowerCase().trim() || '';
     const dept = $('#empDeptFilter')?.value || '';
+    const typeFilter = $('#empTypeFilter')?.value || '';
     const status = $('#empStatusFilter')?.value ?? 'active';
     const maxW = Number(Cache.getSetting('max_warnings','3'));
+    
     let list = this._cache;
-    if (search) list = list.filter(e => (e.full_name||'').toLowerCase().includes(search) || (e.employee_number||'').toLowerCase().includes(search) || (e.phone||'').includes(search));
+    if (search) list = list.filter(e => 
+      (e.full_name||'').toLowerCase().includes(search) || 
+      (e.employee_number||'').toLowerCase().includes(search) || 
+      (e.phone||'').includes(search)
+    );
     if (dept) list = list.filter(e => e.department_id === dept);
+    if (typeFilter) list = list.filter(e => e.salary_type === typeFilter);
     if (status) list = list.filter(e => e.status === status);
+    
     const wrap = $('#empTableWrap');
     if (!list.length) {
-      wrap.innerHTML = `<div class="empty"><div class="ico">👥</div><h3>لا يوجد موظفون</h3><button class="btn btn-primary" onclick="Employees.openForm()">➕ إضافة</button></div>`;
+      wrap.innerHTML = `<div class="empty"><div class="ico">👥</div><h3>لا يوجد موظفون مطابقون</h3><button class="btn btn-primary" onclick="Employees.openForm()">➕ إضافة</button></div>`;
       return;
     }
+    
     wrap.innerHTML = `
       <table class="data">
         <thead><tr>
-          <th>الرقم</th><th>الاسم</th><th>المسمى</th><th>الهاتف</th><th>القسم</th><th>الأساسي</th><th>الحالة</th><th>الإنذارات</th><th>إجراءات</th>
+          <th>الرقم</th><th>الاسم</th><th>المسمى</th><th>القسم</th><th>الأساسي</th><th>النوع</th><th>الإنذارات</th><th>إجراءات</th>
         </tr></thead>
         <tbody>${list.map(e => {
           const lvl = getWarningLevel(e.warnings_count || 0, maxW);
+          const salaryTypeMap = {
+            'monthly': '📅 شهري',
+            'weekly': '📊 أسبوعي',
+            'daily': '📆 يومي'
+          };
+          const salaryType = salaryTypeMap[e.salary_type] || '📅 شهري';
           return `<tr>
             <td><b>${esc(e.employee_number)}</b></td>
             <td>${esc(e.full_name)}</td>
             <td>${esc(e.job_title||'—')}</td>
-            <td>${esc(e.phone||'—')}</td>
             <td>${esc(e.departments?.name||'—')}</td>
             <td class="num">${fmt(e.base_salary, e.currency)}</td>
-            <td><span class="badge ${e.status==='active'?'success':'danger'}">${e.status==='active'?'نشط':'منتهي'}</span></td>
+            <td><span class="badge info">${salaryType}</span></td>
             <td><span class="badge ${lvl.color}">${lvl.icon} ${e.warnings_count||0}</span></td>
             <td>
               <button class="btn btn-ghost btn-sm" onclick="Employees.view('${e.id}')">👁</button>
@@ -319,6 +339,7 @@ const Employees = {
         }).join('')}</tbody>
       </table>`;
   },
+  
   async openForm(id) {
     let emp = null;
     if (id) ({data: emp} = await sb.from('employees').select('*').eq('id', id).single());
@@ -329,6 +350,7 @@ const Employees = {
       const { data } = await sb.from('employee_allowances').select('*').eq('employee_id', id).order('sort_order');
       allowances = data || [];
     }
+    
     Modal.open(id?'✏️ تعديل موظف':'➕ إضافة موظف', `
       <form id="empForm" class="form-grid">
         <label class="field"><span>الرقم</span><input value="${emp?esc(emp.employee_number):'تلقائي'}" disabled></label>
@@ -339,6 +361,11 @@ const Employees = {
         <label class="field"><span>تاريخ التعيين</span><input type="date" name="hire_date" value="${emp?.hire_date||''}"></label>
         <label class="field"><span>نوع الموظف</span><select name="employee_type_id"><option value="">— اختر —</option>${typeOpts}</select></label>
         <label class="field"><span>القسم *</span><select name="department_id" required><option value="">— اختر —</option>${deptOpts}</select></label>
+        <label class="field"><span>نوع الراتب *</span><select name="salary_type" required>
+          <option value="monthly" ${emp?.salary_type==='monthly'||!emp?'selected':''}>📅 شهري (راتب ثابت)</option>
+          <option value="weekly" ${emp?.salary_type==='weekly'?'selected':''}>📊 أسبوعي (راتب أسبوعي)</option>
+          <option value="daily" ${emp?.salary_type==='daily'?'selected':''}>📆 يومي (حسب الحضور)</option>
+        </select></label>
         <label class="field"><span>الراتب الأساسي *</span><input type="number" step="0.01" name="base_salary" required value="${emp?.base_salary||0}"></label>
         <label class="field"><span>العملة</span><select name="currency">
           <option value="SDG" ${emp?.currency==='SDG'?'selected':''}>جنيه سوداني</option>
@@ -354,8 +381,10 @@ const Employees = {
       <button class="btn btn-ghost" onclick="Modal.close()">إلغاء</button>
       <button class="btn btn-primary" id="saveEmp">💾 حفظ</button>
     `, {size: 'lg'});
+    
     window._empAllowances = allowances;
     this.renderAllowances();
+    
     $('#saveEmp').onclick = async () => {
       const form = $('#empForm');
       if (!form.reportValidity()) return;
@@ -363,9 +392,11 @@ const Employees = {
       const payload = Object.fromEntries(fd.entries());
       payload.base_salary = Number(payload.base_salary || 0);
       ['employee_type_id','department_id'].forEach(k => { if (!payload[k]) payload[k] = null; });
+      
       const btn = $('#saveEmp');
       btn.disabled = true;
       let empId = id;
+      
       if (id) {
         const { error } = await sb.from('employees').update(payload).eq('id', id);
         if (error) { toast('❌ ' + error.message, 'error'); btn.disabled = false; return; }
@@ -374,6 +405,7 @@ const Employees = {
         if (error) { toast('❌ ' + error.message, 'error'); btn.disabled = false; return; }
         empId = data.id;
       }
+      
       await sb.from('employee_allowances').delete().eq('employee_id', empId);
       const validAllowances = (window._empAllowances || []).filter(a => a.name && a.amount > 0);
       if (validAllowances.length) {
@@ -381,11 +413,13 @@ const Employees = {
           employee_id: empId, allowance_type: a.type, allowance_name: a.name, amount: a.amount, sort_order: i
         })));
       }
-      toast(id ? '✅ تم' : '✅ تمت الإضافة');
+      
+      toast(id ? '✅ تم التعديل' : '✅ تمت الإضافة');
       Modal.close();
       Employees.load();
     };
   },
+  
   renderAllowances() {
     const list = $('#allowancesList');
     if (!list) return;
@@ -406,12 +440,27 @@ const Employees = {
       </div>
     `).join('');
   },
-  addAllowance() { window._empAllowances = window._empAllowances || []; window._empAllowances.push({ type: 'earning', name: '', amount: 0 }); this.renderAllowances(); },
-  removeAllowance(i) { window._empAllowances.splice(i, 1); this.renderAllowances(); },
-  editAllowance(i, field, value) { if (field === 'amount') value = Number(value || 0); window._empAllowances[i][field] = value; },
+  
+  addAllowance() { 
+    window._empAllowances = window._empAllowances || []; 
+    window._empAllowances.push({ type: 'earning', name: '', amount: 0 }); 
+    this.renderAllowances(); 
+  },
+  
+  removeAllowance(i) { 
+    window._empAllowances.splice(i, 1); 
+    this.renderAllowances(); 
+  },
+  
+  editAllowance(i, field, value) { 
+    if (field === 'amount') value = Number(value || 0); 
+    window._empAllowances[i][field] = value; 
+  },
+  
   async view(id) {
     const { data: e } = await sb.from('employees').select('*, departments(name), employee_types(name)').eq('id', id).single();
     if (!e) return toast('غير موجود', 'error');
+    
     const [att, pays, loans, warns, allowances] = await Promise.all([
       sb.from('attendance_records').select('status, absence_type').eq('employee_id', id),
       sb.from('payroll_records').select('net_salary, is_paid').eq('employee_id', id),
@@ -419,6 +468,7 @@ const Employees = {
       sb.from('employee_warnings').select('*').eq('employee_id', id).order('warning_date', {ascending:false}),
       sb.from('employee_allowances').select('*').eq('employee_id', id).order('sort_order')
     ]);
+    
     const attData = att.data || [];
     const presentDays = attData.filter(a => a.status === 'present').length;
     const absentDays = attData.filter(a => a.status === 'absent').length;
@@ -428,6 +478,9 @@ const Employees = {
     const remainingLoans = (loans.data || []).reduce((s, l) => s + Number(l.remaining_amount || 0), 0);
     const maxW = Number(Cache.getSetting('max_warnings','3'));
     const lvl = getWarningLevel(e.warnings_count || 0, maxW);
+    const salaryTypeMap = { 'monthly': '📅 شهري', 'weekly': '📊 أسبوعي', 'daily': '📆 يومي' };
+    const salaryType = salaryTypeMap[e.salary_type] || '📅 شهري';
+    
     Modal.open(`👤 ${esc(e.full_name)}`, `
       <div class="grid grid-3" style="margin-bottom:20px">
         ${stat('🏢','القسم', esc(e.departments?.name||'—'), 'primary')}
@@ -435,8 +488,12 @@ const Employees = {
         ${stat('📞','الهاتف', esc(e.phone||'—'), 'purple')}
         ${stat('💰','الأساسي', fmt(e.base_salary, e.currency), 'success')}
         ${stat('📅','التعيين', fmtDate(e.hire_date), 'warning')}
+        ${stat('⏰','نوع الراتب', salaryType, 'info')}
         ${stat(lvl.icon,'الإنذارات', e.warnings_count||0, lvl.color)}
+        ${stat('✅','الأيام المستلمة', (pays.data||[]).filter(p=>p.is_paid).length, 'success')}
+        ${stat('📁','عدد الرواتب', (pays.data||[]).length, 'primary')}
       </div>
+      
       ${(allowances.data||[]).length ? `
         <h4 style="margin:20px 0 10px">📋 البنود الثابتة</h4>
         <div style="background:var(--bg-3);border-radius:12px;padding:14px">
@@ -448,12 +505,14 @@ const Employees = {
           `).join('')}
         </div>
       ` : ''}
-      <h4 style="margin:20px 0 10px">📅 الحضور</h4>
+      
+      <h4 style="margin:20px 0 10px">📅 ملخص الحضور (كل الفترات)</h4>
       <div class="grid grid-3">
         ${stat('🟢','حضور', presentDays, 'success')}
         ${stat('🔴','غياب', absentDays, 'danger')}
         ${stat('⚠️','بدون عذر', unexcusedAbsent, 'warning')}
       </div>
+      
       ${(warns.data||[]).length ? `
         <h4 style="margin:20px 0 10px">🚨 الإنذارات</h4>
         <div style="background:var(--bg-3);border-radius:12px;padding:14px;max-height:200px;overflow-y:auto">
@@ -463,12 +522,15 @@ const Employees = {
               <span class="badge ${w.is_active?'danger':'gray'}">${w.is_active?'نشط':'ملغى'}</span>
             </div>
           `).join('')}
-        </div>` : ''}
+        </div>
+      ` : ''}
+      
       <h4 style="margin:20px 0 10px">💵 الرواتب</h4>
       <div class="grid grid-3">
         ${stat('✅','المستلم', fmt(totalPaid, e.currency), 'success')}
         ${stat('📁','عدد الرواتب', (pays.data||[]).length, 'info')}
       </div>
+      
       <h4 style="margin:20px 0 10px">💳 السلف</h4>
       <div class="grid grid-3">
         ${stat('📊','الإجمالي', fmt(totalLoans, e.currency), 'warning')}
@@ -479,6 +541,7 @@ const Employees = {
       <button class="btn btn-primary" onclick="Reports.employeeStatement('${id}')">🖨 طباعة الكشف</button>
     `, {size:'lg'});
   },
+  
   async del(id) {
     confirmModal('🗑 حذف موظف', 'هل أنت متأكد؟', async () => {
       await sb.from('employees').update({ deleted_at: new Date().toISOString() }).eq('id', id);
@@ -488,6 +551,9 @@ const Employees = {
   }
 };
 
+// ============================================
+// Departments
+// ============================================
 const Departments = {
   async render() {
     $('#pageContent').innerHTML = `
@@ -497,19 +563,31 @@ const Departments = {
       <div class="table-wrap"><div class="table-scroll" id="deptTable"></div></div>`;
     await this.load();
   },
+  
   async load() {
     const { data } = await sb.from('departments').select('*').order('name');
     if (!data?.length) {
       $('#deptTable').innerHTML = `<div class="empty"><div class="ico">🏢</div><h3>لا توجد أقسام</h3><button class="btn btn-primary" onclick="Departments.openForm()">➕ إضافة</button></div>`;
       return;
     }
-    $('#deptTable').innerHTML = `<table class="data"><thead><tr><th>الاسم</th><th>الحالة</th><th>إجراءات</th></tr></thead>
+    
+    // ✅ احسب عدد الموظفين لكل قسم
+    const deptIds = data.map(d => d.id);
+    const { data: empCounts } = await sb.from('employees').select('department_id').is('deleted_at', null).eq('status', 'active').in('department_id', deptIds);
+    const countMap = {};
+    (empCounts || []).forEach(e => {
+      countMap[e.department_id] = (countMap[e.department_id] || 0) + 1;
+    });
+    
+    $('#deptTable').innerHTML = `<table class="data"><thead><tr><th>الاسم</th><th>عدد الموظفين</th><th>الحالة</th><th>إجراءات</th></tr></thead>
       <tbody>${data.map(d => `<tr>
         <td><b>${esc(d.name)}</b></td>
+        <td><span class="badge info">👥 ${countMap[d.id] || 0} موظف</span></td>
         <td><span class="badge ${d.is_active?'success':'danger'}">${d.is_active?'نشط':'معطل'}</span></td>
         <td>${Auth.isAdmin()?`<button class="btn btn-ghost btn-sm" onclick="Departments.openForm('${d.id}')">✏️</button><button class="btn btn-ghost btn-sm" onclick="Departments.del('${d.id}')">🗑</button>`:''}</td>
       </tr>`).join('')}</tbody></table>`;
   },
+  
   async openForm(id) {
     let d = null;
     if (id) ({data: d} = await sb.from('departments').select('*').eq('id', id).single());
@@ -521,6 +599,7 @@ const Departments = {
           <option value="false" ${d?.is_active===false?'selected':''}>معطل</option>
         </select></label>
       </form>`, `<button class="btn btn-ghost" onclick="Modal.close()">إلغاء</button><button class="btn btn-primary" id="saveDept">💾 حفظ</button>`);
+    
     $('#saveDept').onclick = async () => {
       const fd = new FormData($('#deptForm'));
       const payload = Object.fromEntries(fd.entries());
@@ -533,9 +612,10 @@ const Departments = {
       await Cache.load();
     };
   },
+  
   async del(id) {
     const { count } = await sb.from('employees').select('id',{count:'exact',head:true}).eq('department_id', id).is('deleted_at',null);
-    if (count > 0) return toast('⚠️ يوجد موظفون', 'warning');
+    if (count > 0) return toast('⚠️ يوجد موظفون في هذا القسم', 'warning');
     confirmModal('🗑 حذف قسم','متأكد؟', async () => {
       await sb.from('departments').delete().eq('id', id);
       toast('✅ تم');
@@ -545,6 +625,9 @@ const Departments = {
   }
 };
 
+// ============================================
+// Attendance
+// ============================================
 const Attendance = {
   async render() {
     $('#pageContent').innerHTML = `
@@ -557,6 +640,7 @@ const Attendance = {
       <div class="table-wrap"><div class="table-scroll" id="attTable"></div></div>`;
     await this.load();
   },
+  
   async load() {
     const { data } = await sb.from('attendance_files').select('*, departments(name)').order('created_at',{ascending:false});
     const wrap = $('#attTable');
@@ -574,6 +658,7 @@ const Attendance = {
         <td><button class="btn btn-primary btn-sm" onclick="Attendance.openRecords('${f.id}')">📝 تسجيل</button></td>
       </tr>`).join('')}</tbody></table>`;
   },
+  
   async openFileForm() {
     const opts = Cache.departments.map(d => `<option value="${d.id}">${esc(d.name)}</option>`).join('');
     Modal.open('📅 ملف حضور جديد', `
@@ -585,6 +670,7 @@ const Attendance = {
         </div>
         <label class="field"><span>القسم *</span><select name="department_id" required><option value="">— اختر —</option>${opts}</select></label>
       </form>`, `<button class="btn btn-ghost" onclick="Modal.close()">إلغاء</button><button class="btn btn-primary" id="saveAtt">💾 إنشاء</button>`);
+    
     $('#saveAtt').onclick = async () => {
       const fd = new FormData($('#attForm'));
       const payload = Object.fromEntries(fd.entries());
@@ -597,59 +683,115 @@ const Attendance = {
       setTimeout(()=>Attendance.openRecords(res.data.id), 300);
     };
   },
+  
   async openRecords(fileId) {
     const { data: file } = await sb.from('attendance_files').select('*').eq('id', fileId).single();
     const { data: emps } = await sb.from('employees').select('*').eq('department_id', file.department_id).is('deleted_at', null).eq('status','active').order('employee_number');
     const { data: recs } = await sb.from('attendance_records').select('*').eq('file_id', fileId);
+    
     const dates = [];
     let d = new Date(file.start_date);
     const end = new Date(file.end_date);
-    while (d <= end) { dates.push(d.toISOString().slice(0,10)); d.setDate(d.getDate()+1); }
+    while (d <= end) { 
+      dates.push(d.toISOString().slice(0,10)); 
+      d.setDate(d.getDate()+1); 
+    }
+    
     const recMap = {};
     (recs||[]).forEach(r => { recMap[`${r.employee_id}_${r.attendance_date}`] = r; });
+    
+    window._attEmps = emps || [];
+    window._attDates = dates;
+    window._attRecMap = recMap;
+    window._attFileId = fileId;
+    
+    const renderTable = (searchTerm = '') => {
+      const search = searchTerm.toLowerCase().trim();
+      let filteredEmps = window._attEmps;
+      
+      if (search) {
+        filteredEmps = filteredEmps.filter(e => 
+          (e.full_name || '').toLowerCase().includes(search) ||
+          (e.employee_number || '').toLowerCase().includes(search)
+        );
+      }
+      
+      const tableBody = filteredEmps.map(e => `
+        <tr>
+          <td style="position:sticky;right:0;background:var(--bg-2);z-index:5;border-left:2px solid var(--border)">
+            <b style="font-size:13px">${esc(e.employee_number)}</b><br>
+            <small style="font-size:11px;color:var(--text-2)">${esc(e.full_name)}</small>
+          </td>
+          ${dates.map(dt=>{
+            const r = recMap[`${e.id}_${dt}`];
+            const st = r?.status || '';
+            const abType = r?.absence_type || '';
+            let selectValue = '';
+            if (st === 'present') selectValue = 'present';
+            else if (st === 'absent' && abType === 'unexcused') selectValue = 'absent_unexcused';
+            else if (st === 'absent' && abType === 'excused') selectValue = 'absent_excused';
+            else if (st === 'absent' && abType === 'sick') selectValue = 'absent_sick';
+            
+            const colorMap = { 
+              '': 'var(--border)', 'present': 'var(--success)', 
+              'absent_excused': 'var(--warning)', 'absent_unexcused': 'var(--danger)', 
+              'absent_sick': 'var(--info)' 
+            };
+            
+            return `<td><select data-file="${fileId}" data-emp="${e.id}" data-date="${dt}"
+              style="width:100%;padding:7px 8px;border-radius:8px;border:2px solid ${colorMap[selectValue]||'var(--border)'};background:var(--bg-2);font-size:12px;font-weight:700;cursor:pointer;color:var(--text)"
+              onchange="Attendance.onSelectChange(this)">
+              <option value="" ${!selectValue?'selected':''}>— لم يُسجل —</option>
+              <option value="present" ${selectValue==='present'?'selected':''}>🟢 حاضر</option>
+              <option value="absent_excused" ${selectValue==='absent_excused'?'selected':''}>🟡 بعذر</option>
+              <option value="absent_unexcused" ${selectValue==='absent_unexcused'?'selected':''}>🔴 بدون عذر</option>
+              <option value="absent_sick" ${selectValue==='absent_sick'?'selected':''}>🔵 مرضي</option>
+            </select></td>`;
+          }).join('')}
+        </tr>`).join('');
+      
+      const tbody = document.getElementById('attTableBody');
+      if (tbody) tbody.innerHTML = tableBody;
+      
+      const counter = document.getElementById('attSearchCounter');
+      if (counter) counter.textContent = `${filteredEmps.length} / ${window._attEmps.length} موظف`;
+    };
+    
     let html = `
       <div style="margin-bottom:16px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding:12px;background:var(--bg-3);border-radius:12px">
         <button class="btn btn-success btn-sm" onclick="Attendance.markAll('${fileId}','present')">✓ الكل حاضر</button>
         <button class="btn btn-danger btn-sm" onclick="Attendance.markAll('${fileId}','absent')">✗ الكل غائب</button>
         <button class="btn btn-ghost btn-sm" onclick="Attendance.markAll('${fileId}','clear')">🗑 مسح</button>
+        <span style="margin-right:auto;font-size:12px;color:var(--text-2)">📊 ${dates.length} يوم | 👥 ${(emps||[]).length} موظف</span>
       </div>
+      
+      <div style="margin-bottom:12px;padding:12px;background:var(--primary-soft);border-radius:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <span style="font-size:20px">🔎</span>
+        <input type="text" id="attSearchInput" placeholder="ابحث بالاسم أو الرقم الوظيفي..."
+          style="flex:1;min-width:200px;padding:10px 14px;border:1.5px solid var(--border);border-radius:10px;background:var(--bg-2);color:var(--text);font-size:14px;font-weight:600">
+        <span id="attSearchCounter" style="font-size:12px;color:var(--text-2);font-weight:700;white-space:nowrap">${(emps||[]).length} / ${(emps||[]).length} موظف</span>
+      </div>
+      
       <div class="table-scroll"><table class="data">
         <thead><tr>
           <th style="position:sticky;right:0;background:var(--bg-3);z-index:6;min-width:180px">الموظف</th>
           ${dates.map(d=>`<th style="min-width:130px">${d.slice(5)}</th>`).join('')}
         </tr></thead>
-        <tbody>${(emps||[]).map(e=>`
-          <tr>
-            <td style="position:sticky;right:0;background:var(--bg-2);z-index:5;border-left:2px solid var(--border)">
-              <b style="font-size:13px">${esc(e.employee_number)}</b><br>
-              <small style="font-size:11px;color:var(--text-2)">${esc(e.full_name)}</small>
-            </td>
-            ${dates.map(dt=>{
-              const r = recMap[`${e.id}_${dt}`];
-              const st = r?.status || '';
-              const abType = r?.absence_type || '';
-              let selectValue = '';
-              if (st === 'present') selectValue = 'present';
-              else if (st === 'absent' && abType === 'unexcused') selectValue = 'absent_unexcused';
-              else if (st === 'absent' && abType === 'excused') selectValue = 'absent_excused';
-              else if (st === 'absent' && abType === 'sick') selectValue = 'absent_sick';
-              const colorMap = { '': 'var(--border)', 'present': 'var(--success)', 'absent_excused': 'var(--warning)', 'absent_unexcused': 'var(--danger)', 'absent_sick': 'var(--info)' };
-              return `<td><select data-file="${fileId}" data-emp="${e.id}" data-date="${dt}"
-                style="width:100%;padding:7px 8px;border-radius:8px;border:2px solid ${colorMap[selectValue]||'var(--border)'};background:var(--bg-2);font-size:12px;font-weight:700;cursor:pointer;color:var(--text)"
-                onchange="Attendance.onSelectChange(this)">
-                <option value="" ${!selectValue?'selected':''}>— لم يُسجل —</option>
-                <option value="present" ${selectValue==='present'?'selected':''}>🟢 حاضر</option>
-                <option value="absent_excused" ${selectValue==='absent_excused'?'selected':''}>🟡 بعذر</option>
-                <option value="absent_unexcused" ${selectValue==='absent_unexcused'?'selected':''}>🔴 بدون عذر</option>
-                <option value="absent_sick" ${selectValue==='absent_sick'?'selected':''}>🔵 مرضي</option>
-              </select></td>`;
-            }).join('')}
-          </tr>`).join('')}
-        </tbody>
+        <tbody id="attTableBody"></tbody>
       </table></div>`;
+    
     Modal.open(`📝 ${esc(file.name)}`, html, `<button class="btn btn-primary" onclick="Modal.close()">تم</button>`, {size:'lg'});
-    window._attRecMap = recMap;
+    
+    renderTable();
+    
+    setTimeout(() => {
+      const searchInput = document.getElementById('attSearchInput');
+      if (searchInput) {
+        searchInput.oninput = (e) => renderTable(e.target.value);
+      }
+    }, 100);
   },
+  
   async onSelectChange(selectEl) {
     const fileId = selectEl.dataset.file;
     const empId = selectEl.dataset.emp;
@@ -658,12 +800,11 @@ const Attendance = {
     const key = `${empId}_${date}`;
     
     const colorMap = { 
-      '': 'var(--border)', 
-      'present': 'var(--success)', 
-      'absent_excused': 'var(--warning)', 
-      'absent_unexcused': 'var(--danger)', 
+      '': 'var(--border)', 'present': 'var(--success)', 
+      'absent_excused': 'var(--warning)', 'absent_unexcused': 'var(--danger)', 
       'absent_sick': 'var(--info)' 
     };
+    
     selectEl.style.borderColor = colorMap[value] || 'var(--border)';
     selectEl.disabled = true;
     selectEl.style.opacity = '0.6';
@@ -684,26 +825,65 @@ const Attendance = {
         else if (value === 'absent_unexcused') { status = 'absent'; absence_type = 'unexcused'; }
         else if (value === 'absent_sick') { status = 'absent'; absence_type = 'sick'; }
         
-        const { data, error } = await sb.from('attendance_records')
-          .upsert(
-            { file_id: fileId, employee_id: empId, attendance_date: date, status, absence_type },
-            { onConflict: 'file_id,employee_id,attendance_date' }
-          )
-          .select()
-          .single();
+        const existing = window._attRecMap?.[key];
         
-        if (error) throw error;
-        window._attRecMap[key] = data;
+        if (existing?.id) {
+          const { data, error } = await sb.from('attendance_records')
+            .update({ status, absence_type })
+            .eq('id', existing.id)
+            .select()
+            .single();
+          if (error) throw error;
+          window._attRecMap[key] = data;
+        } else {
+          const { data, error } = await sb.from('attendance_records')
+            .insert({
+              file_id: fileId,
+              employee_id: empId,
+              attendance_date: date,
+              status,
+              absence_type
+            })
+            .select()
+            .single();
+          
+          if (error) {
+            if (error.code === '23505') {
+              const { data: existingRec } = await sb.from('attendance_records')
+                .select('id')
+                .eq('file_id', fileId)
+                .eq('employee_id', empId)
+                .eq('attendance_date', date)
+                .single();
+              
+              if (existingRec) {
+                const { data: updated, error: updErr } = await sb.from('attendance_records')
+                  .update({ status, absence_type })
+                  .eq('id', existingRec.id)
+                  .select()
+                  .single();
+                if (updErr) throw updErr;
+                window._attRecMap[key] = updated;
+              } else {
+                throw error;
+              }
+            } else {
+              throw error;
+            }
+          } else {
+            window._attRecMap[key] = data;
+          }
+        }
         
         if (status === 'absent' && absence_type === 'unexcused') {
-          toast('🚨 غياب بدون عذر', 'warning');
+          toast('🚨 غياب بدون عذر — سيُحسب في الرواتب', 'warning');
         } else {
           toast('✅ تم');
         }
       }
     } catch (err) {
-      console.error(err);
-      toast('❌ ' + err.message, 'error');
+      console.error('Attendance error:', err);
+      toast('❌ ' + (err.message || 'حدث خطأ'), 'error');
       const rec = window._attRecMap?.[key];
       if (rec?.status === 'present') selectEl.value = 'present';
       else if (rec?.status === 'absent' && rec?.absence_type === 'unexcused') selectEl.value = 'absent_unexcused';
@@ -715,29 +895,78 @@ const Attendance = {
       selectEl.style.opacity = '1';
     }
   },
+  
   async markAll(fileId, status) {
-    const { data: file } = await sb.from('attendance_files').select('*').eq('id', fileId).single();
-    const { data: emps } = await sb.from('employees').select('id').eq('department_id', file.department_id).is('deleted_at',null).eq('status','active');
-    const dates = [];
-    let d = new Date(file.start_date); const end = new Date(file.end_date);
-    while (d <= end) { dates.push(d.toISOString().slice(0,10)); d.setDate(d.getDate()+1); }
-    if (status === 'clear') {
+    try {
+      const { data: file } = await sb.from('attendance_files').select('*').eq('id', fileId).single();
+      if (!file) return toast('الملف غير موجود', 'error');
+      
+      const { data: emps } = await sb.from('employees')
+        .select('id')
+        .eq('department_id', file.department_id)
+        .is('deleted_at', null)
+        .eq('status', 'active');
+      
+      if (!emps?.length) return toast('لا يوجد موظفون', 'warning');
+      
+      const dates = [];
+      let d = new Date(file.start_date); 
+      const end = new Date(file.end_date);
+      while (d <= end) { 
+        dates.push(d.toISOString().slice(0,10)); 
+        d.setDate(d.getDate()+1); 
+      }
+      
+      if (status === 'clear') {
+        toast('⏳ جاري المسح...');
+        const { error } = await sb.from('attendance_records').delete().eq('file_id', fileId);
+        if (error) throw error;
+        toast('✅ تم المسح');
+        Modal.close();
+        setTimeout(() => Attendance.openRecords(fileId), 200);
+        return;
+      }
+      
+      const rows = [];
+      for (const e of emps) {
+        for (const dt of dates) {
+          rows.push({ 
+            file_id: fileId, 
+            employee_id: e.id, 
+            attendance_date: dt, 
+            status: status, 
+            absence_type: status === 'absent' ? 'unexcused' : null 
+          });
+        }
+      }
+      
+      toast(`⏳ جاري حفظ ${rows.length} سجل...`);
+      
       await sb.from('attendance_records').delete().eq('file_id', fileId);
-      toast('✅ تم');
-      Attendance.openRecords(fileId);
-      return;
+      
+      const chunkSize = 500;
+      let saved = 0;
+      for (let i = 0; i < rows.length; i += chunkSize) {
+        const chunk = rows.slice(i, i + chunkSize);
+        const { error } = await sb.from('attendance_records').insert(chunk);
+        if (error) throw error;
+        saved += chunk.length;
+      }
+      
+      toast(`✅ تم حفظ ${saved} سجل بنجاح`);
+      Modal.close();
+      setTimeout(() => Attendance.openRecords(fileId), 200);
+      
+    } catch (err) {
+      console.error('markAll error:', err);
+      toast('❌ ' + (err.message || 'حدث خطأ'), 'error');
     }
-    const rows = [];
-    for (const e of (emps||[])) for (const dt of dates) {
-      rows.push({ file_id: fileId, employee_id: e.id, attendance_date: dt, status, absence_type: status === 'absent' ? 'unexcused' : null });
-    }
-    const { error } = await sb.from('attendance_records').upsert(rows, {onConflict:'file_id,employee_id,attendance_date'});
-    if (error) return toast(error.message,'error');
-    toast('✅ تم');
-    Attendance.openRecords(fileId);
   }
 };
 
+// ============================================
+// Warnings (الإنذارات)
+// ============================================
 const WARNING_REASONS = {
   unexcused_absence: { label: 'غياب بدون عذر', icon: '🔴' },
   late: { label: 'تأخير متكرر', icon: '⏰' },
@@ -747,6 +976,7 @@ const WARNING_REASONS = {
 
 const Warnings = {
   _cache: [],
+  
   async render() {
     const maxW = Number(Cache.getSetting('max_warnings', '3'));
     $('#pageContent').innerHTML = `
@@ -759,7 +989,7 @@ const Warnings = {
       <div class="grid grid-4" id="warnStats" style="margin-bottom:24px"></div>
       <div class="table-wrap">
         <div class="table-toolbar">
-          <input class="grow" id="warnSearch" placeholder="🔎 ابحث...">
+          <input class="grow" id="warnSearch" placeholder="🔎 ابحث بالاسم...">
           <select id="warnReasonFilter">
             <option value="">كل الأسباب</option>
             ${Object.entries(WARNING_REASONS).map(([k,v])=>`<option value="${k}">${v.icon} ${v.label}</option>`).join('')}
@@ -774,12 +1004,14 @@ const Warnings = {
     $('#warnReasonFilter').onchange = () => this.renderTable();
     $('#warnStatusFilter').onchange = () => this.renderTable();
   },
+  
   async load() {
     const { data } = await sb.from('employee_warnings').select('*, employees(employee_number, full_name, warnings_count, departments(name))').order('created_at', { ascending: false });
     this._cache = data || [];
     this.renderStats();
     this.renderTable();
   },
+  
   renderStats() {
     const maxW = Number(Cache.getSetting('max_warnings', '3'));
     const all = this._cache;
@@ -787,6 +1019,7 @@ const Warnings = {
     const uniqueEmps = new Set(active.map(w => w.employee_id));
     const criticalEmps = new Set(active.filter(w => (w.employees?.warnings_count || 0) >= maxW + 1).map(w => w.employee_id));
     const atMaxEmps = new Set(active.filter(w => (w.employees?.warnings_count || 0) === maxW).map(w => w.employee_id));
+    
     $('#warnStats').innerHTML = `
       ${stat('📋','إجمالي', all.length, 'warning')}
       ${stat('🚨','نشطة', active.length, 'danger')}
@@ -794,6 +1027,7 @@ const Warnings = {
       ${stat('⛔','خطر', criticalEmps.size + atMaxEmps.size, 'danger')}
     `;
   },
+  
   renderTable() {
     const search = $('#warnSearch')?.value.toLowerCase().trim() || '';
     const reason = $('#warnReasonFilter')?.value || '';
@@ -802,9 +1036,15 @@ const Warnings = {
     if (search) list = list.filter(w => (w.employees?.full_name || '').toLowerCase().includes(search));
     if (reason) list = list.filter(w => w.reason === reason);
     if (status === 'active') list = list.filter(w => w.is_active);
+    
     const wrap = $('#warnTable');
     const maxW = Number(Cache.getSetting('max_warnings', '3'));
-    if (!list.length) { wrap.innerHTML = `<div class="empty"><div class="ico">✅</div><h3>لا توجد إنذارات</h3></div>`; return; }
+    
+    if (!list.length) { 
+      wrap.innerHTML = `<div class="empty"><div class="ico">✅</div><h3>لا توجد إنذارات</h3></div>`; 
+      return; 
+    }
+    
     wrap.innerHTML = `<table class="data">
       <thead><tr><th>التاريخ</th><th>الموظف</th><th>القسم</th><th>السبب</th><th>العدد</th><th>الحالة</th><th>إجراءات</th></tr></thead>
       <tbody>${list.map(w => {
@@ -823,10 +1063,12 @@ const Warnings = {
       }).join('')}</tbody>
     </table>`;
   },
+  
   async openManualForm(preselectEmpId) {
     const { data: emps } = await sb.from('employees').select('id, employee_number, full_name').is('deleted_at', null).eq('status','active').order('employee_number');
     const opts = (emps || []).map(e => `<option value="${e.id}" ${preselectEmpId===e.id?'selected':''}>${esc(e.employee_number)} — ${esc(e.full_name)}</option>`).join('');
     const reasonOpts = Object.entries(WARNING_REASONS).filter(([k]) => k !== 'unexcused_absence').map(([k,v]) => `<option value="${k}">${v.icon} ${v.label}</option>`).join('');
+    
     Modal.open('➕ إنذار يدوي', `
       <form id="warningForm">
         <label class="field"><span>الموظف *</span><select name="employee_id" required><option value="">— اختر —</option>${opts}</select></label>
@@ -835,6 +1077,7 @@ const Warnings = {
         <label class="field"><span>الوصف</span><textarea name="description" rows="3"></textarea></label>
       </form>
     `, `<button class="btn btn-ghost" onclick="Modal.close()">إلغاء</button><button class="btn btn-danger" id="saveWarn">🚨 إضافة</button>`);
+    
     $('#saveWarn').onclick = async () => {
       const form = $('#warningForm');
       if (!form.reportValidity()) return;
@@ -842,15 +1085,19 @@ const Warnings = {
       const payload = Object.fromEntries(fd.entries());
       payload.added_by = Auth.currentUser.id;
       if (!payload.description) payload.description = 'إنذار يدوي';
+      
       const { error } = await sb.from('employee_warnings').insert(payload);
       if (error) return toast('❌ ' + error.message, 'error');
+      
       const { data: emp } = await sb.from('employees').select('warnings_count').eq('id', payload.employee_id).single();
       await sb.from('employees').update({ warnings_count: (emp?.warnings_count || 0) + 1 }).eq('id', payload.employee_id);
+      
       toast('✅ تم');
       Modal.close();
       Warnings.load();
     };
   },
+  
   async remove(id, empName) {
     confirmModal('🗑 إلغاء إنذار', `إلغاء إنذار <b>${esc(empName)}</b>؟`, async () => {
       const { data: w } = await sb.from('employee_warnings').select('employee_id').eq('id', id).single();
@@ -864,6 +1111,9 @@ const Warnings = {
   }
 };
 
+// ============================================
+// Payroll (الرواتب) - كامل
+// ============================================
 const Payroll = {
   async render() {
     const deptFilter = window._payrollDeptFilter || '';
@@ -890,24 +1140,35 @@ const Payroll = {
     $('#payrollStatusFilter').onchange = () => Payroll.load();
     await this.load();
   },
+  
   async load() {
     const deptFilter = window._payrollDeptFilter || '';
     const statusFilter = $('#payrollStatusFilter')?.value || '';
     let q = sb.from('payroll_files').select('*, departments(name)').order('created_at', {ascending: false});
     if (deptFilter) q = q.eq('department_id', deptFilter);
     if (statusFilter) q = q.eq('status', statusFilter);
-    if (!Auth.isAdmin() && Auth.currentProfile?.department_id) q = q.eq('department_id', Auth.currentProfile.department_id);
+    if (!Auth.isAdmin() && Auth.currentProfile?.department_id) {
+      q = q.eq('department_id', Auth.currentProfile.department_id);
+    }
     const { data } = await q;
     const wrap = $('#payrollList');
+    
     if (!data?.length) {
       wrap.innerHTML = `<div class="empty"><div class="ico">💵</div><h3>لا توجد ملفات</h3><button class="btn btn-primary" onclick="Payroll.openForm()">➕ إنشاء</button></div>`;
       return;
     }
     wrap.innerHTML = `<div class="grid grid-3">${data.map(p => this.renderCard(p)).join('')}</div>`;
   },
+  
   renderCard(p) {
-    const statusInfo = { draft: { label: 'مسودة', color: 'gray', icon: '📝' }, approved: { label: 'معتمد', color: 'info', icon: '✅' }, paid: { label: 'مدفوع', color: 'success', icon: '💰' } }[p.status] || { label: p.status, color: 'gray', icon: '📄' };
+    const statusInfo = { 
+      draft: { label: 'مسودة', color: 'gray', icon: '📝' }, 
+      approved: { label: 'معتمد', color: 'info', icon: '✅' }, 
+      paid: { label: 'مدفوع', color: 'success', icon: '💰' } 
+    }[p.status] || { label: p.status, color: 'gray', icon: '📄' };
+    
     const days = p.period_days || Math.ceil((new Date(p.end_date) - new Date(p.start_date)) / 86400000) + 1;
+    
     return `<div class="card" style="cursor:pointer;border-top:4px solid var(--${statusInfo.color})" onclick="Payroll.open('${p.id}')">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">
         <div style="flex:1;min-width:0">
@@ -933,8 +1194,16 @@ const Payroll = {
       </div>
     </div>`;
   },
+  
   async openForm() {
-    const defaultDept = window._payrollDeptFilter || (!Auth.isAdmin() ? Auth.currentProfile?.department_id : '');
+    const isDeptManager = !Auth.isAdmin();
+    const myDept = Auth.currentProfile?.department_id;
+    const defaultDept = window._payrollDeptFilter || (isDeptManager ? myDept : '');
+    
+    if (isDeptManager && !myDept) {
+      return toast('⚠️ حسابك غير مرتبط بقسم. تواصل مع المدير.', 'error');
+    }
+    
     Modal.open('➕ ملف رواتب جديد', `
       <div style="margin-bottom:20px">
         <div style="font-size:14px;font-weight:700;margin-bottom:12px;color:var(--text-2)">⚡ قالب سريع:</div>
@@ -956,65 +1225,137 @@ const Payroll = {
       <div style="text-align:center;color:var(--text-2);font-size:12px;margin:16px 0">أو اختر يدوياً</div>
       <form id="payForm" class="form-grid">
         <label class="field full"><span>اسم الملف *</span><input name="name" required id="payName"></label>
-        <label class="field"><span>القسم *</span><select name="department_id" required id="payDept"><option value="">— اختر —</option>${Cache.departments.map(d => `<option value="${d.id}" ${defaultDept===d.id?'selected':''}>${esc(d.name)}</option>`).join('')}</select></label>
+        
+        ${isDeptManager ? `
+          <div class="field full">
+            <span>القسم</span>
+            <div style="padding:11px 14px;background:var(--bg-3);border-radius:11px;font-weight:800;color:var(--primary)">
+              🏢 ${esc(Cache.departments.find(d => d.id === myDept)?.name || '—')}
+            </div>
+            <input type="hidden" name="department_id" id="payDept" value="${myDept}">
+          </div>
+        ` : `
+          <label class="field"><span>القسم *</span><select name="department_id" required id="payDept"><option value="">— اختر —</option>${Cache.departments.map(d => `<option value="${d.id}" ${defaultDept===d.id?'selected':''}>${esc(d.name)}</option>`).join('')}</select></label>
+        `}
+        
         <label class="field full">
           <span>🔗 ربط مع ملف حضور</span>
           <select name="attendance_file_id" id="payAtt">
             <option value="">✏️ بدون ربط (إدخال يدوي)</option>
           </select>
           <div style="font-size:11px;color:var(--text-2);margin-top:4px;padding:6px;background:var(--bg-3);border-radius:6px">
-            💡 عند الربط: يُحسب خصم الغياب تلقائياً من أيام الغياب بدون عذر
+            💡 عند الربط: يُحسب خصم الغياب تلقائياً
           </div>
         </label>
+        
         <label class="field"><span>من *</span><input type="date" name="start_date" required id="payStart"></label>
         <label class="field"><span>إلى *</span><input type="date" name="end_date" required id="payEnd"></label>
         <label class="field full" style="display:flex;align-items:center;gap:8px"><input type="checkbox" name="lock_after_payment" checked style="width:auto"><span style="margin:0">🔒 قفل بعد الدفع</span></label>
       </form>
       <div id="periodPreview" style="margin-top:12px"></div>
     `, `<button class="btn btn-ghost" onclick="Modal.close()">إلغاء</button><button class="btn btn-primary" id="savePay">💾 إنشاء</button>`, {size:'lg'});
-    $('#payDept').onchange = async (e) => {
-      const deptId = e.target.value;
-      if (!deptId) return;
-      const { data: attFiles } = await sb.from('attendance_files').select('id, name').eq('department_id', deptId).order('start_date', {ascending: false});
-      $('#payAtt').innerHTML = '<option value="">✏️ بدون ربط (إدخال يدوي)</option>' + (attFiles||[]).map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join('');
+    
+    const loadAttendanceFiles = async (deptId) => {
+      if (!deptId) {
+        $('#payAtt').innerHTML = '<option value="">✏️ بدون ربط</option>';
+        return;
+      }
+      
+      const { data: attFiles, error } = await sb.from('attendance_files')
+        .select('id, name, start_date, end_date, status')
+        .eq('department_id', deptId)
+        .order('start_date', { ascending: false });
+      
+      if (error) {
+        $('#payAtt').innerHTML = '<option value="">❌ خطأ في التحميل</option>';
+        return;
+      }
+      
+      if (!attFiles?.length) {
+        $('#payAtt').innerHTML = '<option value="">⚠️ لا توجد ملفات حضور لهذا القسم</option>';
+        return;
+      }
+      
+      $('#payAtt').innerHTML = '<option value="">✏️ بدون ربط (إدخال يدوي)</option>' + 
+        attFiles.map(a => {
+          const icon = a.status === 'open' ? '🟢' : '⚫';
+          return `<option value="${a.id}">${icon} ${esc(a.name)} (${fmtDate(a.start_date)} - ${fmtDate(a.end_date)})</option>`;
+        }).join('');
     };
+    
+    if (!isDeptManager && $('#payDept')) {
+      $('#payDept').onchange = (e) => loadAttendanceFiles(e.target.value);
+    }
+    
+    if (isDeptManager && myDept) {
+      setTimeout(() => loadAttendanceFiles(myDept), 100);
+    }
+    
     const updatePreview = () => {
-      const start = $('#payStart').value;
-      const end = $('#payEnd').value;
+      const start = $('#payStart')?.value;
+      const end = $('#payEnd')?.value;
       const preview = $('#periodPreview');
-      if (start && end) {
+      if (start && end && preview) {
         const days = Math.ceil((new Date(end) - new Date(start)) / 86400000) + 1;
-        if (days > 0) preview.innerHTML = `<div style="background:var(--primary-soft);padding:14px;border-radius:10px;text-align:center"><div style="font-size:12px;color:var(--text-2);font-weight:700;margin-bottom:4px">📊 المدة</div><div style="font-size:20px;font-weight:900;color:var(--primary)">${days} يوم</div></div>`;
-      } else preview.innerHTML = '';
+        if (days > 0) {
+          preview.innerHTML = `<div style="background:var(--primary-soft);padding:14px;border-radius:10px;text-align:center"><div style="font-size:12px;color:var(--text-2);font-weight:700;margin-bottom:4px">📊 المدة</div><div style="font-size:20px;font-weight:900;color:var(--primary)">${days} يوم</div></div>`;
+        }
+      }
     };
-    $('#payStart').oninput = updatePreview;
-    $('#payEnd').oninput = updatePreview;
+    
+    setTimeout(() => {
+      if ($('#payStart')) $('#payStart').oninput = updatePreview;
+      if ($('#payEnd')) $('#payEnd').oninput = updatePreview;
+      updatePreview();
+    }, 150);
+    
     $('#savePay').onclick = async () => {
       const form = $('#payForm');
       if (!form.reportValidity()) return;
       const fd = new FormData(form);
       const payload = Object.fromEntries(fd.entries());
+      
+      if (isDeptManager) {
+        payload.department_id = myDept;
+      }
+      
       payload.lock_after_payment = fd.has('lock_after_payment');
       if (!payload.attendance_file_id) payload.attendance_file_id = null;
       payload.created_by = Auth.currentUser.id;
+      
       const days = Math.ceil((new Date(payload.end_date) - new Date(payload.start_date)) / 86400000) + 1;
       if (days <= 0) return toast('⚠️ تاريخ غير صحيح', 'warning');
       payload.period_days = days;
       payload.period_type = days === 1 ? 'daily' : days <= 7 ? 'weekly' : 'monthly';
+      
       const btn = $('#savePay');
       btn.disabled = true;
+      
       const { data, error } = await sb.from('payroll_files').insert(payload).select().single();
       if (error) { toast('❌ ' + error.message, 'error'); btn.disabled = false; return; }
-      const { data: emps } = await sb.from('employees').select('*').eq('department_id', payload.department_id).is('deleted_at',null).eq('status','active').order('employee_number');
+      
+      const { data: emps } = await sb.from('employees')
+        .select('*')
+        .eq('department_id', payload.department_id)
+        .is('deleted_at', null)
+        .eq('status', 'active')
+        .order('employee_number');
+      
       if (emps?.length) {
-        const records = emps.map(e => ({ payroll_file_id: data.id, employee_id: e.id, base_salary: e.base_salary || 0 }));
+        const records = emps.map(e => ({
+          payroll_file_id: data.id,
+          employee_id: e.id,
+          base_salary: e.base_salary || 0
+        }));
         await sb.from('payroll_records').insert(records);
       }
+      
       toast(`✅ تم (${emps?.length || 0} موظف)`);
       Modal.close();
       await Payroll.open(data.id);
     };
   },
+  
   setTemplate(type) {
     const today = new Date();
     const y = today.getFullYear();
@@ -1023,34 +1364,51 @@ const Payroll = {
     const first = `${y}-${String(m).padStart(2,'0')}-01`;
     const last = `${y}-${String(m).padStart(2,'0')}-${String(lastDay).padStart(2,'0')}`;
     const names = { monthly: 'شهري', weekly: 'أسبوعي', half: 'نصفي', '10days': '10 أيام' };
-    if (type === 'monthly') { $('#payStart').value = first; $('#payEnd').value = last; }
-    else if (type === 'weekly') { const e = new Date(today); e.setDate(today.getDate()+6); $('#payStart').value = today.toISOString().slice(0,10); $('#payEnd').value = e.toISOString().slice(0,10); }
-    else if (type === 'half') { const e = new Date(today); e.setDate(today.getDate()+14); $('#payStart').value = today.toISOString().slice(0,10); $('#payEnd').value = e.toISOString().slice(0,10); }
-    else if (type === '10days') { const e = new Date(today); e.setDate(today.getDate()+9); $('#payStart').value = today.toISOString().slice(0,10); $('#payEnd').value = e.toISOString().slice(0,10); }
+    
+    if (type === 'monthly') { 
+      $('#payStart').value = first; 
+      $('#payEnd').value = last; 
+    }
+    else if (type === 'weekly') { 
+      const e = new Date(today); 
+      e.setDate(today.getDate()+6); 
+      $('#payStart').value = today.toISOString().slice(0,10); 
+      $('#payEnd').value = e.toISOString().slice(0,10); 
+    }
+    else if (type === 'half') { 
+      const e = new Date(today); 
+      e.setDate(today.getDate()+14); 
+      $('#payStart').value = today.toISOString().slice(0,10); 
+      $('#payEnd').value = e.toISOString().slice(0,10); 
+    }
+    else if (type === '10days') { 
+      const e = new Date(today); 
+      e.setDate(today.getDate()+9); 
+      $('#payStart').value = today.toISOString().slice(0,10); 
+      $('#payEnd').value = e.toISOString().slice(0,10); 
+    }
+    
     $('#payName').value = `رواتب ${names[type]} - ${today.toLocaleDateString('ar-EG')}`;
-    const start = $('#payStart').value; const end = $('#payEnd').value;
+    
+    const start = $('#payStart').value; 
+    const end = $('#payEnd').value;
     if (start && end) {
       const days = Math.ceil((new Date(end) - new Date(start)) / 86400000) + 1;
       $('#periodPreview').innerHTML = `<div style="background:var(--primary-soft);padding:14px;border-radius:10px;text-align:center"><div style="font-size:12px;color:var(--text-2);font-weight:700;margin-bottom:4px">📊 المدة</div><div style="font-size:20px;font-weight:900;color:var(--primary)">${days} يوم</div></div>`;
     }
   },
+  
   async open(id) {
     const { data: file } = await sb.from('payroll_files').select('*, departments(name)').eq('id', id).single();
-    const { data: records } = await sb.from('payroll_records').select('*, employees(employee_number, full_name, currency)').eq('payroll_file_id', id);
     
-    let attMap = {};
-    if (file.attendance_file_id) {
-      const { data: attRecords } = await sb.from('attendance_records')
-        .select('employee_id, status')
-        .eq('file_id', file.attendance_file_id);
-      
-      (attRecords || []).forEach(a => {
-        if (!attMap[a.employee_id]) attMap[a.employee_id] = { present: 0, absent: 0 };
-        if (a.status === 'present') attMap[a.employee_id].present++;
-        else if (a.status === 'absent') attMap[a.employee_id].absent++;
-      });
+    const { data: recordsData, error: recordsErr } = await sb.rpc('get_payroll_records_detailed', { p_file_id: id });
+    
+    if (recordsErr) {
+      toast('❌ خطأ في جلب البيانات: ' + recordsErr.message, 'error');
+      return;
     }
     
+    const records = recordsData?.records || [];
     const paid = file.status === 'paid';
     const locked = file.is_locked;
     const days = file.period_days || Math.ceil((new Date(file.end_date) - new Date(file.start_date)) / 86400000) + 1;
@@ -1071,30 +1429,46 @@ const Payroll = {
           <button class="btn btn-purple btn-sm" onclick="Payroll.addBulkEarning('${id}')">💰 حافز جماعي</button>
           <button class="btn btn-warning btn-sm" onclick="Payroll.applyLoans('${id}')">💳 تطبيق السلف</button>
         </div>` : ''}
+      
+      <div style="margin-bottom:12px;padding:12px;background:var(--primary-soft);border-radius:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <span style="font-size:20px">🔎</span>
+        <input type="text" id="paySearchInput" placeholder="ابحث بالاسم أو الرقم الوظيفي..."
+          style="flex:1;min-width:200px;padding:10px 14px;border:1.5px solid var(--border);border-radius:10px;background:var(--bg-2);color:var(--text);font-size:14px;font-weight:600">
+        <span id="paySearchCounter" style="font-size:12px;color:var(--text-2);font-weight:700;white-space:nowrap">${records.length} / ${records.length} موظف</span>
+      </div>
+      
       <div class="table-scroll"><table class="data">
         <thead><tr>
-          <th>الرقم</th><th>الموظف</th><th>الأساسي</th>
-          <th>📅 حضور</th>
-          <th>➕ استحقاقات</th><th>➖ استقطاعات</th><th>📅 غياب</th><th>💰 الصافي</th><th>إجراءات</th>
+          <th>الرقم</th><th>الموظف</th><th>الأساسي</th><th>النوع</th>
+          <th style="background:var(--success-soft);color:#065f46">📅 حضور</th>
+          <th style="background:var(--danger-soft);color:#991b1b">📅 غياب</th>
+          <th>➕ استحقاقات</th><th>➖ استقطاعات</th><th>💰 خصم الغياب</th><th>💰 الصافي</th><th>إجراءات</th>
         </tr></thead>
-        <tbody>${(records||[]).map(r=>{
-          const att = attMap[r.employee_id] || { present: 0, absent: 0 };
+        <tbody>${records.map(r => {
+          const presentDays = Number(r.present_days || 0);
+          const absentDays = Number(r.absent_days || 0);
+          const typeMap = { 'monthly': '📅 شهري', 'weekly': '📊 أسبوعي', 'daily': '📆 يومي' };
+          const typeLabel = typeMap[r.salary_type] || '📅 شهري';
+          
           return `
             <tr>
-              <td><b>${esc(r.employees?.employee_number)}</b></td>
-              <td>${esc(r.employees?.full_name)}</td>
-              <td class="num">${fmt(r.base_salary, r.employees?.currency)}</td>
-              <td class="num" style="color:var(--success);font-weight:900">🟢 ${att.present}</td>
-              <td class="num" style="color:var(--success)">${fmt(r.total_earnings, r.employees?.currency)}</td>
-              <td class="num" style="color:var(--danger)">${fmt(r.total_deductions, r.employees?.currency)}</td>
-              <td class="num" style="color:var(--warning)">${fmt(r.absence_deduction, r.employees?.currency)}</td>
-              <td class="num" style="color:var(--success);font-weight:900">${fmt(r.net_salary, r.employees?.currency)}</td>
+              <td><b>${esc(r.employee_number)}</b></td>
+              <td>${esc(r.full_name)}</td>
+              <td class="num">${fmt(r.base_salary, r.currency)}</td>
+              <td><span class="badge ${r.salary_type==='daily'?'info':r.salary_type==='weekly'?'purple':'primary'}">${typeLabel}</span></td>
+              <td class="num" style="color:var(--success);font-weight:900;font-size:15px">🟢 ${presentDays}</td>
+              <td class="num" style="color:var(--danger);font-weight:900;font-size:15px">🔴 ${absentDays}</td>
+              <td class="num" style="color:var(--success)">${fmt(r.total_earnings, r.currency)}</td>
+              <td class="num" style="color:var(--danger)">${fmt(r.total_deductions, r.currency)}</td>
+              <td class="num" style="color:var(--warning)">${fmt(r.absence_deduction, r.currency)}</td>
+              <td class="num" style="color:var(--success);font-weight:900">${fmt(r.net_salary, r.currency)}</td>
               <td>
                 ${!paid && !locked ? `<button class="btn btn-info btn-sm" onclick="Payroll.details('${r.id}','${id}')" title="تفاصيل">📊</button><button class="btn btn-success btn-sm" onclick="Payroll.paySingle('${r.id}','${id}')" title="دفع">💸</button>` : (r.is_paid ? '<span class="badge success">✅</span>' : '—')}
               </td>
-            </tr>`;
+            </tr>
+          `;
         }).join('')}</tbody>
-        <tfoot><tr><td colspan="7">الإجمالي</td><td class="num">${fmt((records||[]).reduce((s,r)=>s+Number(r.net_salary||0),0))}</td><td></td></tr></tfoot>
+        <tfoot><tr><td colspan="9">الإجمالي</td><td class="num" style="color:var(--success);font-size:15px">${fmt(records.reduce((s,r)=>s+Number(r.net_salary||0),0))}</td><td></td></tr></tfoot>
       </table></div>
     `;
     
@@ -1104,10 +1478,35 @@ const Payroll = {
       ${locked && Auth.isAdmin() ? `<button class="btn btn-warning" onclick="Payroll.unlock('${id}')">🔓 فك القفل</button>` : ''}
       <button class="btn btn-purple" onclick="Reports.payrollFile('${id}')">🖨️ طباعة الكل بالتفصيل</button>
     `, {size:'lg'});
+    
+    // ✅ ربط البحث
+    setTimeout(() => {
+      const searchInput = document.getElementById('paySearchInput');
+      const counter = document.getElementById('paySearchCounter');
+      const table = document.querySelector('.table-scroll tbody');
+      
+      if (searchInput && table) {
+        const rows = Array.from(table.querySelectorAll('tr'));
+        
+        searchInput.oninput = (e) => {
+          const term = e.target.value.toLowerCase().trim();
+          let visible = 0;
+          
+          rows.forEach(row => {
+            const text = row.textContent.toLowerCase();
+            const match = !term || text.includes(term);
+            row.style.display = match ? '' : 'none';
+            if (match) visible++;
+          });
+          
+          if (counter) counter.textContent = `${visible} / ${rows.length} موظف`;
+        };
+      }
+    }, 100);
   }
 };
 
-// ✅ إكمال Payroll
+// ✅ إكمال Payroll بالدوال المتبقية
 Object.assign(Payroll, {
   async details(recordId, fileId) {
     const calc = await calcEmployeeNet(recordId);
@@ -1119,7 +1518,7 @@ Object.assign(Payroll, {
     const { data: fileData } = await sb.from('payroll_files').select('status, is_locked, attendance_file_id, start_date, end_date, period_days').eq('id', fileId).single();
     const isLocked = fileData?.is_locked || fileData?.status === 'paid';
     const isLinked = !!fileData?.attendance_file_id;
-
+    
     const renderEarning = (e) => `
       <div style="display:flex;align-items:center;gap:8px;padding:10px;background:var(--bg-2);border-radius:8px;margin-bottom:6px;border:1px solid var(--border)">
         <div style="flex:1;font-size:13.5px;font-weight:700;text-align:right">${esc(e.custom_name || e.earning_types?.name || 'بند')}</div>
@@ -1130,7 +1529,7 @@ Object.assign(Payroll, {
           <button class="btn btn-danger btn-sm" onclick="Payroll.delEarning('${e.id}','${recordId}','${fileId}')" style="padding:6px 9px">🗑</button>
         ` : `<b style="font-size:14px">${fmt(e.amount, currency)}</b>`}
       </div>`;
-
+    
     const renderDeduction = (d) => `
       <div style="display:flex;align-items:center;gap:8px;padding:10px;background:var(--bg-2);border-radius:8px;margin-bottom:6px;border:1px solid var(--border)">
         <div style="flex:1;font-size:13.5px;font-weight:700;text-align:right">${esc(d.custom_name || d.deduction_types?.name || 'بند')}</div>
@@ -1141,9 +1540,11 @@ Object.assign(Payroll, {
           <button class="btn btn-danger btn-sm" onclick="Payroll.delDeduction('${d.id}','${recordId}','${fileId}')" style="padding:6px 9px">🗑</button>
         ` : `<b style="font-size:14px">${fmt(d.amount, currency)}</b>`}
       </div>`;
-
+    
     const att = calc.attendance;
-
+    const isDaily = calc.salaryType === 'daily';
+    const isWeekly = calc.salaryType === 'weekly';
+    
     Modal.open(`📊 تفاصيل راتب: ${esc(emp?.full_name)}`, `
       <div style="background:linear-gradient(135deg,var(--primary-soft),var(--purple-soft));padding:16px;border-radius:12px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
         <div>
@@ -1151,11 +1552,15 @@ Object.assign(Payroll, {
           <div style="font-weight:900;font-size:16px">${esc(emp?.employee_number)} — ${esc(emp?.full_name)}</div>
         </div>
         <div style="text-align:left">
-          <div style="font-size:12px;color:var(--text-2);font-weight:700">الراتب الأساسي (شهري)</div>
-          <div style="font-weight:900;font-size:18px;color:var(--primary)">${fmt(r.base_salary, currency)}</div>
+          <div style="font-size:12px;color:var(--text-2);font-weight:700">نوع الراتب</div>
+          <div style="font-weight:900;font-size:16px;color:var(--primary)">${isDaily?'📆 يومي':isWeekly?'📊 أسبوعي':'📅 شهري'}</div>
+        </div>
+        <div style="text-align:left">
+          <div style="font-size:12px;color:var(--text-2);font-weight:700">الأجر اليومي</div>
+          <div style="font-weight:900;font-size:18px;color:var(--primary)">${fmt(att.dailyWage, currency)}</div>
         </div>
       </div>
-
+      
       <div style="margin-bottom:16px;background:linear-gradient(135deg,#dbeafe,#e0e7ff);padding:16px;border-radius:12px;border:2px solid #6366f1">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
           <b style="color:#4338ca;font-size:15px">📅 تفاصيل الحضور خلال الفترة</b>
@@ -1182,14 +1587,24 @@ Object.assign(Payroll, {
         </div>
         
         <div style="background:#fff;padding:12px;border-radius:8px;border-right:4px solid #dc2626">
-          <div style="font-size:12px;color:var(--text-2);font-weight:700;margin-bottom:6px">💰 حساب خصم الغياب بدون عذر:</div>
+          <div style="font-size:12px;color:var(--text-2);font-weight:700;margin-bottom:6px">💰 طريقة الحساب:</div>
           <div style="font-family:monospace;font-size:12px;color:#991b1b;background:#fef2f2;padding:10px;border-radius:6px;direction:rtl;text-align:right;line-height:1.8">
-            <b>الأجر اليومي</b> = ${fmt(r.base_salary, currency)} ÷ 30 = <b>${fmt(att.dailyWage, currency)}</b><br>
-            <b>خصم الغياب</b> = ${fmt(att.dailyWage, currency)} × ${att.unexcusedDays} أيام = <b>${fmt(calc.absenceDeduction, currency)}</b>
+            ${isDaily ? `
+              <b>عامل يومي:</b><br>
+              <b>الراتب</b> = الأجر اليومي (${fmt(att.dailyWage, currency)}) × أيام الحضور (${att.presentDays}) = <b>${fmt(r.base_salary, currency)}</b>
+            ` : isWeekly ? `
+              <b>موظف أسبوعي:</b><br>
+              <b>الأجر اليومي</b> = ${fmt(r.base_salary, currency)} ÷ 7 = <b>${fmt(att.dailyWage, currency)}</b><br>
+              <b>خصم الغياب</b> = ${fmt(att.dailyWage, currency)} × ${att.unexcusedDays} أيام بدون عذر = <b>${fmt(calc.absenceDeduction, currency)}</b>
+            ` : `
+              <b>موظف شهري:</b><br>
+              <b>الأجر اليومي</b> = ${fmt(r.base_salary, currency)} ÷ 30 = <b>${fmt(att.dailyWage, currency)}</b><br>
+              <b>خصم الغياب</b> = ${fmt(att.dailyWage, currency)} × ${att.unexcusedDays} أيام بدون عذر = <b>${fmt(calc.absenceDeduction, currency)}</b>
+            `}
           </div>
         </div>
       </div>
-
+      
       <div style="margin-bottom:16px;background:var(--success-soft);padding:16px;border-radius:12px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
           <b style="color:var(--success);font-size:15px">➕ الاستحقاقات (${calc.earnings.length})</b>
@@ -1201,7 +1616,7 @@ Object.assign(Payroll, {
           <span>${fmt(calc.totalEarnings, currency)}</span>
         </div>
       </div>
-
+      
       <div style="margin-bottom:16px;background:var(--danger-soft);padding:16px;border-radius:12px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
           <b style="color:var(--danger);font-size:15px">➖ الاستقطاعات (${calc.deductions.length})</b>
@@ -1209,30 +1624,24 @@ Object.assign(Payroll, {
         </div>
         <div>${calc.deductions.map(renderDeduction).join('') || '<div style="text-align:center;color:var(--text-2);padding:16px;font-size:13px">لا توجد بنود</div>'}</div>
         
-        <div style="padding:12px;background:#fff;border:2px dashed #dc2626;border-radius:8px;margin-top:10px">
-          <div style="display:flex;justify-content:space-between;align-items:center;font-weight:900;color:#dc2626;font-size:14px">
-            <span>📅 خصم الغياب ${isLinked ? '(تلقائي)' : '(يدوي)'}:</span>
-            <span>${fmt(calc.absenceDeduction, currency)}</span>
-          </div>
-          <div style="font-size:11px;color:var(--text-2);margin-top:4px;text-align:center">
-            (${att.unexcusedDays} يوم بدون عذر × ${fmt(att.dailyWage, currency)})
-          </div>
-          ${!isLinked && !isLocked ? `
-            <div style="margin-top:8px;text-align:center">
-              <input type="number" value="${calc.absenceDeduction}" step="0.01" id="manualAbsDed"
-                style="width:150px;padding:6px 10px;border-radius:6px;border:1.5px solid #dc2626;text-align:center;font-weight:800;font-size:13px;background:var(--bg-2);color:var(--text)"
-                onblur="Payroll.updateAbsenceDeduction('${recordId}','${fileId}',this.value)">
-              <div style="font-size:10px;color:var(--text-2);margin-top:4px">💡 يمكن التعديل يدوياً (إدخال يدوي)</div>
+        ${!isDaily ? `
+          <div style="padding:12px;background:#fff;border:2px dashed #dc2626;border-radius:8px;margin-top:10px">
+            <div style="display:flex;justify-content:space-between;align-items:center;font-weight:900;color:#dc2626;font-size:14px">
+              <span>📅 خصم الغياب ${isLinked ? '(تلقائي)' : '(يدوي)'}:</span>
+              <span>${fmt(calc.absenceDeduction, currency)}</span>
             </div>
-          ` : ''}
-        </div>
+            <div style="font-size:11px;color:var(--text-2);margin-top:4px;text-align:center">
+              (${att.unexcusedDays} يوم بدون عذر × ${fmt(att.dailyWage, currency)})
+            </div>
+          </div>
+        ` : ''}
         
         <div style="display:flex;justify-content:space-between;padding:12px;background:var(--danger);color:#fff;border-radius:8px;margin-top:10px;font-weight:900;font-size:15px">
           <span>✅ إجمالي الاستقطاعات:</span>
           <span>${fmt(calc.totalDeductions + calc.absenceDeduction, currency)}</span>
         </div>
       </div>
-
+      
       <div style="background:linear-gradient(135deg, var(--success), var(--success-h));padding:22px;border-radius:14px;text-align:center;color:#fff;box-shadow:0 8px 20px rgba(5,150,105,.3)">
         <div style="font-size:13px;opacity:0.95;margin-bottom:6px;font-weight:700">💰 الصافي المستحق</div>
         <div style="font-size:32px;font-weight:900">${fmt(calc.net, currency)}</div>
@@ -1243,12 +1652,12 @@ Object.assign(Payroll, {
       <button class="btn btn-success" onclick="Modal.close();Payroll.paySingle('${recordId}','${fileId}')">💸 دفع هذا الموظف</button>
     `, {size: 'lg'});
   },
-
+  
   closeDetails(fileId) {
     Modal.close();
     setTimeout(() => Payroll.open(fileId), 150);
   },
-
+  
   async updateEarningInline(id, recordId, fileId, newAmount) {
     await sb.from('payroll_earnings').update({ amount: Number(newAmount || 0) }).eq('id', id);
     await this.recalcEmployee(recordId, fileId);
@@ -1256,6 +1665,7 @@ Object.assign(Payroll, {
     setTimeout(() => this.details(recordId, fileId), 100);
     toast('✅ تم الحفظ');
   },
+  
   async updateDeductionInline(id, recordId, fileId, newAmount) {
     await sb.from('payroll_deductions').update({ amount: Number(newAmount || 0) }).eq('id', id);
     await this.recalcEmployee(recordId, fileId);
@@ -1263,6 +1673,7 @@ Object.assign(Payroll, {
     setTimeout(() => this.details(recordId, fileId), 100);
     toast('✅ تم الحفظ');
   },
+  
   async updateAbsenceDeduction(recordId, fileId, newValue) {
     const value = Number(newValue || 0);
     await sb.from('payroll_records').update({ absence_deduction: value }).eq('id', recordId);
@@ -1271,57 +1682,75 @@ Object.assign(Payroll, {
     setTimeout(() => this.details(recordId, fileId), 100);
     toast('✅ تم تحديث خصم الغياب');
   },
-
+  
   async addEarning(recordId, fileId) {
     const types = Cache.earningTypes.filter(t => t.is_active);
     if (!types.length) return toast('لا توجد بنود', 'warning');
+    
     Modal.open('➕ إضافة استحقاق', `
       <label class="field"><span>البند</span><select id="addEarnType">${types.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select></label>
       <label class="field"><span>أو اسم مخصص</span><input id="addEarnCustom" placeholder="بدل سكن..."></label>
       <label class="field"><span>المبلغ *</span><input type="number" id="addEarnAmount" value="0" step="0.01" required></label>
     `, `<button class="btn btn-ghost" onclick="Modal.close();Payroll.details('${recordId}','${fileId}')">إلغاء</button><button class="btn btn-success" id="saveEarn">💾 إضافة</button>`);
+    
     $('#saveEarn').onclick = async () => {
       const typeId = $('#addEarnType').value;
       const customName = $('#addEarnCustom').value.trim();
       const amount = Number($('#addEarnAmount').value || 0);
       if (amount <= 0) return toast('أدخل مبلغاً', 'warning');
+      
       const payload = { payroll_record_id: recordId, amount, is_custom: !!customName };
-      if (customName) { payload.custom_name = customName; payload.earning_type_id = null; }
-      else { payload.earning_type_id = typeId; }
+      if (customName) { 
+        payload.custom_name = customName; 
+        payload.earning_type_id = null; 
+      } else { 
+        payload.earning_type_id = typeId; 
+      }
+      
       const { error } = await sb.from('payroll_earnings').insert(payload);
       if (error) return toast('❌ ' + error.message, 'error');
+      
       await Payroll.recalcEmployee(recordId, fileId);
       toast('✅ تمت الإضافة');
       Modal.close();
       setTimeout(() => Payroll.details(recordId, fileId), 150);
     };
   },
-
+  
   async addDeduction(recordId, fileId) {
     const types = Cache.deductionTypes.filter(t => t.is_active);
     if (!types.length) return toast('لا توجد بنود', 'warning');
+    
     Modal.open('➕ إضافة استقطاع', `
       <label class="field"><span>البند</span><select id="addDedType">${types.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select></label>
       <label class="field"><span>أو اسم مخصص</span><input id="addDedCustom" placeholder="جزاء..."></label>
       <label class="field"><span>المبلغ *</span><input type="number" id="addDedAmount" value="0" step="0.01" required></label>
     `, `<button class="btn btn-ghost" onclick="Modal.close();Payroll.details('${recordId}','${fileId}')">إلغاء</button><button class="btn btn-danger" id="saveDed">💾 إضافة</button>`);
+    
     $('#saveDed').onclick = async () => {
       const typeId = $('#addDedType').value;
       const customName = $('#addDedCustom').value.trim();
       const amount = Number($('#addDedAmount').value || 0);
       if (amount <= 0) return toast('أدخل مبلغاً', 'warning');
+      
       const payload = { payroll_record_id: recordId, amount, is_custom: !!customName };
-      if (customName) { payload.custom_name = customName; payload.deduction_type_id = null; }
-      else { payload.deduction_type_id = typeId; }
+      if (customName) { 
+        payload.custom_name = customName; 
+        payload.deduction_type_id = null; 
+      } else { 
+        payload.deduction_type_id = typeId; 
+      }
+      
       const { error } = await sb.from('payroll_deductions').insert(payload);
       if (error) return toast('❌ ' + error.message, 'error');
+      
       await Payroll.recalcEmployee(recordId, fileId);
       toast('✅ تمت الإضافة');
       Modal.close();
       setTimeout(() => Payroll.details(recordId, fileId), 150);
     };
   },
-
+  
   async delEarning(id, recordId, fileId) {
     if (!confirm('حذف هذا البند؟')) return;
     await sb.from('payroll_earnings').delete().eq('id', id);
@@ -1330,6 +1759,7 @@ Object.assign(Payroll, {
     Modal.close();
     setTimeout(() => this.details(recordId, fileId), 150);
   },
+  
   async delDeduction(id, recordId, fileId) {
     if (!confirm('حذف هذا البند؟')) return;
     await sb.from('payroll_deductions').delete().eq('id', id);
@@ -1338,98 +1768,62 @@ Object.assign(Payroll, {
     Modal.close();
     setTimeout(() => this.details(recordId, fileId), 150);
   },
-
+  
   async recalcEmployee(recordId, fileId) {
-    const calc = await calcEmployeeNet(recordId);
-    if (!calc) return;
-    await sb.from('payroll_records').update({
-      total_earnings: calc.totalEarnings,
-      total_deductions: calc.totalDeductions,
-      absence_deduction: calc.absenceDeduction,
-      net_salary: calc.net
-    }).eq('id', recordId);
+    const { data, error } = await sb.rpc('calc_employee_payroll', { p_record_id: recordId });
+    if (error || !data?.success) {
+      console.error('Recalc error:', error || data?.error);
+      return;
+    }
+    
     const { data: allRecs } = await sb.from('payroll_records').select('net_salary').eq('payroll_file_id', fileId);
     const total = (allRecs||[]).reduce((s,r)=>s+Number(r.net_salary||0),0);
     await sb.from('payroll_files').update({ total_net: total }).eq('id', fileId);
   },
-
+  
   async recalc(id) {
-    const { data: file } = await sb.from('payroll_files').select('*').eq('id', id).single();
-    const { data: records } = await sb.from('payroll_records').select('*').eq('payroll_file_id', id);
-    const recIds = (records||[]).map(r=>r.id);
-    const { data: earns } = recIds.length ? await sb.from('payroll_earnings').select('*').in('payroll_record_id', recIds) : {data:[]};
-    const { data: deds } = recIds.length ? await sb.from('payroll_deductions').select('*').in('payroll_record_id', recIds) : {data:[]};
+    toast('⏳ جاري إعادة الحساب...');
     
-    let attRecords = [];
-    if (file.attendance_file_id) {
-      const { data: att } = await sb.from('attendance_records').select('*').eq('file_id', file.attendance_file_id);
-      attRecords = att || [];
+    const { data, error } = await sb.rpc('recalc_payroll_file', { p_file_id: id });
+    
+    if (error || !data?.success) {
+      toast('❌ ' + (error?.message || data?.error), 'error');
+      return;
     }
     
-    let totalNet = 0;
-    for (const r of (records||[])) {
-      const earnsSum = (earns||[]).filter(x=>x.payroll_record_id===r.id).reduce((s,e)=>s+Number(e.amount),0);
-      const dedsSum = (deds||[]).filter(x=>x.payroll_record_id===r.id).reduce((s,d)=>s+Number(d.amount),0);
-      
-      let absenceDeduction = 0;
-      let absenceDays = 0;
-      
-      if (file.attendance_file_id) {
-        const unexcused = (attRecords||[]).filter(a => 
-          a.employee_id === r.employee_id && a.status === 'absent' && a.absence_type === 'unexcused'
-        ).length;
-        const allAbsent = (attRecords||[]).filter(a => 
-          a.employee_id === r.employee_id && a.status === 'absent'
-        ).length;
-        const dailyWage = Number(r.base_salary) / 30;
-        absenceDeduction = dailyWage * unexcused;
-        absenceDays = allAbsent;
-      } else {
-        absenceDeduction = Number(r.absence_deduction || 0);
-        absenceDays = Number(r.absence_days || 0);
-      }
-      
-      const totalE = Number(r.base_salary) + earnsSum;
-      const net = totalE - dedsSum - absenceDeduction;
-      
-      await sb.from('payroll_records').update({
-        total_earnings: totalE,
-        total_deductions: dedsSum,
-        absence_deduction: absenceDeduction,
-        absence_days: absenceDays,
-        net_salary: net
-      }).eq('id', r.id);
-      totalNet += net;
-    }
-    await sb.from('payroll_files').update({ total_net: totalNet }).eq('id', id);
-    toast('✅ تم إعادة الحساب');
+    toast(`✅ تم إعادة حساب ${data.records_updated} موظف`);
     Modal.close();
-    setTimeout(()=>Payroll.open(id), 200);
+    setTimeout(() => Payroll.open(id), 200);
   },
-
+  
   async addBulkEarning(id) {
     const types = Cache.earningTypes.filter(t=>!t.is_system);
     if (!types.length) return toast('لا توجد بنود', 'warning');
+    
     Modal.open('💰 حافز جماعي', `
       <label class="field"><span>البند</span><select id="bulkType">${types.map(t=>`<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select></label>
       <label class="field"><span>المبلغ لكل موظف</span><input type="number" id="bulkAmount" value="0"></label>
     `, `<button class="btn btn-ghost" onclick="Modal.close()">إلغاء</button><button class="btn btn-primary" id="bulkSave">تطبيق</button>`);
+    
     $('#bulkSave').onclick = async () => {
       const typeId = $('#bulkType').value;
       const amount = Number($('#bulkAmount').value || 0);
       if (!typeId || !amount) return toast('أدخل بيانات', 'warning');
+      
       const { data: records } = await sb.from('payroll_records').select('id').eq('payroll_file_id', id);
       await sb.from('payroll_earnings').insert((records||[]).map(r=>({payroll_record_id:r.id, earning_type_id:typeId, amount})));
+      
       toast('✅ تم');
       Modal.close();
       await this.recalc(id);
     };
   },
-
+  
   async applyLoans(id) {
     const { data: records } = await sb.from('payroll_records').select('*').eq('payroll_file_id', id);
     const { data: loans } = await sb.from('loans').select('*').eq('status','active');
     const { data: loanType } = await sb.from('deduction_types').select('id').eq('name','سلفة').single();
+    
     let applied = 0;
     for (const r of (records||[])) {
       const loan = (loans||[]).find(l => l.employee_id === r.employee_id && Number(l.remaining_amount) > 0);
@@ -1439,74 +1833,136 @@ Object.assign(Payroll, {
       await sb.from('payroll_deductions').insert({ payroll_record_id: r.id, deduction_type_id: loanType.id, amount });
       applied++;
     }
+    
     toast(`✅ تم تطبيق ${applied} سلفة`);
     await this.recalc(id);
   },
-
+  
   async pay(id) {
     const { data: treasuries } = await sb.from('treasuries').select('*').eq('is_active', true);
     const { data: file } = await sb.from('payroll_files').select('*, departments(name)').eq('id', id).single();
-    const { count } = await sb.from('payroll_records').select('id', {count:'exact', head:true}).eq('payroll_file_id', id);
+    
+    const { data: allRecords } = await sb.from('payroll_records').select('id, net_salary, is_paid').eq('payroll_file_id', id);
+    
+    const totalRecords = allRecords?.length || 0;
+    const paidRecords = allRecords?.filter(r => r.is_paid) || [];
+    const unpaidRecords = allRecords?.filter(r => !r.is_paid) || [];
+    const unpaidTotal = unpaidRecords.reduce((s, r) => s + Number(r.net_salary || 0), 0);
+    const paidTotal = paidRecords.reduce((s, r) => s + Number(r.net_salary || 0), 0);
+    
+    if (unpaidRecords.length === 0) {
+      return toast('⚠️ جميع الموظفين مدفوعون مسبقاً', 'warning');
+    }
+    
     const opts = (treasuries || []).map(t => {
       const isDept = t.department_id === file.department_id;
       return `<option value="${t.id}" ${isDept ? 'selected' : ''}>${t.type==='cash'?'💵':'🏛️'} ${esc(t.name)} ${isDept?'⭐':''} — ${fmt(t.current_balance)}</option>`;
     }).join('');
-    Modal.open('💸 تأكيد الدفع', `
+    
+    Modal.open('💸 تأكيد دفع الكل', `
       <div style="background:var(--primary-soft);padding:16px;border-radius:12px;margin-bottom:16px">
         <div style="display:flex;justify-content:space-between;margin-bottom:8px"><span>الملف:</span><b>${esc(file.name)}</b></div>
-        <div style="display:flex;justify-content:space-between;margin-bottom:8px"><span>الموظفين:</span><b>${count||0}</b></div>
-        <div style="display:flex;justify-content:space-between;font-size:18px;color:var(--success)"><span>الإجمالي:</span><b>${fmt(file.total_net)}</b></div>
+        <div style="display:flex;justify-content:space-between;margin-bottom:8px"><span>إجمالي الموظفين:</span><b>${totalRecords}</b></div>
+        
+        ${paidRecords.length > 0 ? `
+          <div style="display:flex;justify-content:space-between;margin-bottom:8px;color:#059669">
+            <span>✅ مدفوع مسبقاً:</span>
+            <b>${paidRecords.length} موظف — ${fmt(paidTotal)}</b>
+          </div>
+        ` : ''}
+        
+        <div style="display:flex;justify-content:space-between;margin-bottom:8px;color:#dc2626">
+          <span>⏳ سيتم دفعهم الآن:</span>
+          <b>${unpaidRecords.length} موظف</b>
+        </div>
+        
+        <div style="display:flex;justify-content:space-between;font-size:18px;color:var(--success);padding-top:12px;border-top:2px solid var(--border);margin-top:12px">
+          <span>💰 المبلغ المطلوب:</span>
+          <b>${fmt(unpaidTotal)}</b>
+        </div>
       </div>
+      
+      ${paidRecords.length > 0 ? `
+        <div style="padding:12px;background:var(--warning-soft);border-radius:10px;font-size:12.5px;color:#78350f;margin-bottom:16px">
+          💡 <b>ملاحظة:</b> ${paidRecords.length} موظف مدفوعون مسبقاً. سيتم <b>تخطيهم</b> تلقائياً.
+        </div>
+      ` : ''}
+      
       <label class="field"><span>الخزينة</span><select id="payTreasury"><option value="">— اختر —</option>${opts}</select></label>
-    `, `<button class="btn btn-ghost" onclick="Modal.close();Payroll.open('${id}')">إلغاء</button><button class="btn btn-success" id="doPay">💸 تأكيد</button>`);
+    `, `
+      <button class="btn btn-ghost" onclick="Modal.close();Payroll.open('${id}')">إلغاء</button>
+      <button class="btn btn-success" id="doPay">💸 دفع ${unpaidRecords.length} موظف</button>
+    `);
+    
     $('#doPay').onclick = async () => {
       const tid = $('#payTreasury').value;
       if (!tid) return toast('اختر الخزينة', 'warning');
+      
       const btn = $('#doPay');
       btn.disabled = true;
-      const { data, error } = await sb.rpc('pay_payroll', { p_payroll_id: id, p_treasury_id: tid, p_payment_method: 'cash' });
-      if (error || !data?.success) { toast('❌ ' + (error?.message || data?.error), 'error'); btn.disabled = false; return; }
-      toast('✅ تم الدفع');
-      await notifyUser('💸 تم دفع الرواتب', `تم دفع ${file.name}`, 'success');
+      btn.textContent = '⏳ جاري الدفع...';
+      
+      const { data, error } = await sb.rpc('pay_payroll', { 
+        p_payroll_id: id, 
+        p_treasury_id: tid, 
+        p_payment_method: 'cash' 
+      });
+      
+      if (error || !data?.success) {
+        toast('❌ ' + (error?.message || data?.error), 'error');
+        btn.disabled = false;
+        btn.textContent = '💸 دفع';
+        return;
+      }
+      
+      toast(`✅ تم دفع ${data.paid_count} موظف بمبلغ ${fmt(data.total)}`);
+      await notifyUser('💸 تم دفع الرواتب', `تم دفع ${data.paid_count} موظف في ${file.name}`, 'success');
       Modal.close();
       Payroll.load();
     };
   },
-
+  
   async paySingle(recordId, fileId) {
     const { data: r } = await sb.from('payroll_records').select('*, employees(full_name, employee_number, currency)').eq('id', recordId).single();
     if (!r) return toast('غير موجود', 'error');
     if (r.is_paid) return toast('تم دفعه مسبقاً', 'warning');
+    
     const { data: treasuries } = await sb.from('treasuries').select('*').eq('is_active', true);
     const opts = (treasuries||[]).map(t => `<option value="${t.id}">${t.type==='cash'?'💵':'🏛️'} ${esc(t.name)} — ${fmt(t.current_balance)}</option>`).join('');
+    
     Modal.open(`💸 دفع: ${esc(r.employees?.full_name)}`, `
       <div style="background:var(--primary-soft);padding:16px;border-radius:12px;margin-bottom:16px">
         <div style="display:flex;justify-content:space-between;margin-bottom:8px"><span>الموظف:</span><b>${esc(r.employees?.employee_number)}</b></div>
-        ${Number(r.absence_deduction || 0) > 0 ? `
-          <div style="display:flex;justify-content:space-between;margin-bottom:8px;color:#dc2626">
-            <span>📅 خصم الغياب:</span>
-            <b>${fmt(r.absence_deduction, r.employees?.currency)}</b>
-          </div>
-        ` : ''}
         <div style="display:flex;justify-content:space-between;font-size:20px;color:var(--success)"><span>الصافي:</span><b>${fmt(r.net_salary, r.employees?.currency)}</b></div>
       </div>
       <label class="field"><span>الخزينة</span><select id="paySingleTreasury"><option value="">— اختر —</option>${opts}</select></label>
     `, `<button class="btn btn-ghost" onclick="Modal.close();Payroll.open('${fileId}')">إلغاء</button><button class="btn btn-success" id="doPaySingle">💸 تأكيد</button>`);
+    
     $('#doPaySingle').onclick = async () => {
       const tid = $('#paySingleTreasury').value;
       if (!tid) return toast('اختر الخزينة', 'warning');
       const btn = $('#doPaySingle');
       btn.disabled = true;
+      
       const { data, error } = await sb.rpc('pay_single_employee', {
-        p_payroll_record_id: recordId, p_treasury_id: tid, p_payment_method: 'cash', p_amount: r.net_salary
+        p_payroll_record_id: recordId, 
+        p_treasury_id: tid, 
+        p_payment_method: 'cash', 
+        p_amount: r.net_salary
       });
-      if (error || !data?.success) { toast('❌ ' + (error?.message || data?.error), 'error'); btn.disabled = false; return; }
+      
+      if (error || !data?.success) { 
+        toast('❌ ' + (error?.message || data?.error), 'error'); 
+        btn.disabled = false; 
+        return; 
+      }
+      
       toast('✅ تم الدفع');
       Modal.close();
       Payroll.open(fileId);
     };
   },
-
+  
   async unlock(id) {
     confirmModal('🔓 فك القفل', 'فك القفل؟', async () => {
       await sb.from('payroll_files').update({ is_locked: false }).eq('id', id);
@@ -1514,7 +1970,7 @@ Object.assign(Payroll, {
       Payroll.open(id);
     }, false);
   },
-
+  
   async del(id, name) {
     confirmModal('🗑 حذف ملف', `حذف "${esc(name)}"؟`, async () => {
       await sb.from('payroll_files').delete().eq('id', id);
@@ -1522,21 +1978,25 @@ Object.assign(Payroll, {
       Payroll.load();
     });
   },
-
+  
   async printSingle(recordId) {
     const calc = await calcEmployeeNet(recordId);
     if (!calc) return toast('غير موجود', 'error');
+    
     const r = calc.record;
     const { data: emp } = await sb.from('employees').select('*, departments(name)').eq('id', r.employee_id).single();
     const { data: file } = await sb.from('payroll_files').select('*').eq('id', r.payroll_file_id).single();
     const currency = emp?.currency || 'SDG';
     const factoryName = Cache.getSetting('factory_name', 'مصنع الصندل');
     const att = calc.attendance;
-
+    const isDaily = calc.salaryType === 'daily';
+    const isWeekly = calc.salaryType === 'weekly';
+    
     let earningsRows = `<tr style="background:#f0fdf4">
-      <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:700">1. الراتب الأساسي (شهري)</td>
+      <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:700">1. ${isDaily ? 'الأجر اليومي × أيام الحضور' : isWeekly ? 'الراتب الأسبوعي' : 'الراتب الأساسي (شهري)'}</td>
       <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:800">${fmt(r.base_salary, currency)}</td>
     </tr>`;
+    
     calc.earnings.forEach((e, i) => {
       const name = e.custom_name || e.earning_types?.name || 'بند';
       earningsRows += `<tr>
@@ -1544,7 +2004,7 @@ Object.assign(Payroll, {
         <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:800;color:#059669">+ ${fmt(e.amount, currency)}</td>
       </tr>`;
     });
-
+    
     let deductionsRows = '';
     calc.deductions.forEach((d, i) => {
       const name = d.custom_name || d.deduction_types?.name || 'بند';
@@ -1553,6 +2013,7 @@ Object.assign(Payroll, {
         <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:800;color:#dc2626">- ${fmt(d.amount, currency)}</td>
       </tr>`;
     });
+    
     if (calc.absenceDeduction > 0) {
       deductionsRows += `<tr>
         <td style="padding:8px;border:1px solid #ddd;text-align:right;color:#dc2626">${calc.deductions.length+1}. خصم الغياب (${att.unexcusedDays} يوم)</td>
@@ -1560,7 +2021,7 @@ Object.assign(Payroll, {
       </tr>`;
     }
     if (!deductionsRows) deductionsRows = `<tr><td colspan="2" style="padding:8px;border:1px solid #ddd;text-align:center;color:#999">لا توجد استقطاعات</td></tr>`;
-
+    
     const html = `
       <div id="printArea" style="direction:rtl;font-family:Cairo,sans-serif;padding:20px;background:#fff;color:#111;max-width:800px;margin:0 auto">
         <div style="text-align:center;margin-bottom:20px;border-bottom:3px solid #6366f1;padding-bottom:14px">
@@ -1569,6 +2030,7 @@ Object.assign(Payroll, {
           <h2 style="margin:8px 0;font-size:16px">كشف راتب موظف</h2>
           <div style="font-size:11px;color:#666">📅 ${fmtDate(file.start_date)} — ${fmtDate(file.end_date)}</div>
         </div>
+        
         <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:16px">
           <tr>
             <td style="padding:8px;border:1px solid #ddd;background:#f5f5f5;width:20%"><b>الاسم:</b></td>
@@ -1579,11 +2041,11 @@ Object.assign(Payroll, {
           <tr>
             <td style="padding:8px;border:1px solid #ddd;background:#f5f5f5"><b>القسم:</b></td>
             <td style="padding:8px;border:1px solid #ddd">${esc(emp?.departments?.name || '—')}</td>
-            <td style="padding:8px;border:1px solid #ddd;background:#f5f5f5"><b>المسمى:</b></td>
-            <td style="padding:8px;border:1px solid #ddd">${esc(emp?.job_title || '—')}</td>
+            <td style="padding:8px;border:1px solid #ddd;background:#f5f5f5"><b>نوع الراتب:</b></td>
+            <td style="padding:8px;border:1px solid #ddd">${isDaily?'📆 يومي':isWeekly?'📊 أسبوعي':'📅 شهري'}</td>
           </tr>
         </table>
-
+        
         <div style="background:#eef2ff;padding:12px;border-radius:8px;margin-bottom:16px;border-right:4px solid #4338ca">
           <b style="color:#4338ca">📅 الحضور خلال الفترة:</b>
           <span style="margin-right:16px">🟢 حاضر: <b>${att.presentDays}</b></span>
@@ -1591,7 +2053,7 @@ Object.assign(Payroll, {
           <span style="margin-right:16px">🟡 بعذر: <b>${att.excusedDays}</b></span>
           <span>🔵 مرضي: <b>${att.sickDays}</b></span>
         </div>
-
+        
         <h3 style="color:#059669;margin-bottom:6px;font-size:14px;background:#d1fae5;padding:6px 10px;border-radius:6px">💵 الاستحقاقات</h3>
         <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:16px">
           <thead><tr style="background:#059669;color:#fff">
@@ -1606,7 +2068,7 @@ Object.assign(Payroll, {
             </tr>
           </tbody>
         </table>
-
+        
         <h3 style="color:#dc2626;margin-bottom:6px;font-size:14px;background:#fee2e2;padding:6px 10px;border-radius:6px">➖ الاستقطاعات</h3>
         <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:16px">
           <thead><tr style="background:#dc2626;color:#fff">
@@ -1621,12 +2083,12 @@ Object.assign(Payroll, {
             </tr>
           </tbody>
         </table>
-
+        
         <div style="background:linear-gradient(135deg,#059669,#10b981);color:#fff;padding:18px;border-radius:12px;text-align:center;margin-bottom:24px">
           <div style="font-size:12px;margin-bottom:6px">💰 الصافي المستحق</div>
           <div style="font-size:30px;font-weight:900">${fmt(calc.net, currency)}</div>
         </div>
-
+        
         <table style="width:100%;margin-top:40px;font-size:11px">
           <tr>
             <td style="width:50%;text-align:center"><div style="border-top:2px solid #333;padding-top:6px">توقيع الموظف</div></td>
@@ -1634,6 +2096,7 @@ Object.assign(Payroll, {
           </tr>
         </table>
       </div>`;
+    
     Modal.open('🖨️ كشف الراتب التفصيلي', html, `
       <button class="btn btn-ghost" onclick="Modal.close();Payroll.details('${recordId}','${r.payroll_file_id}')">رجوع</button>
       <button class="btn btn-primary" onclick="Reports.print('A4')">🖨️ طباعة / PDF</button>
@@ -1641,6 +2104,9 @@ Object.assign(Payroll, {
   }
 });
 
+// ============================================
+// Loans (السلف)
+// ============================================
 const Loans = {
   async render() {
     $('#pageContent').innerHTML = `
@@ -1650,6 +2116,7 @@ const Loans = {
       <div class="table-wrap"><div class="table-scroll" id="loansTable"></div></div>`;
     await this.load();
   },
+  
   async load() {
     const { data } = await sb.from('loans').select('*, employees(employee_number, full_name, currency)').order('created_at',{ascending:false});
     const wrap = $('#loansTable');
@@ -1670,9 +2137,11 @@ const Loans = {
         <td><span class="badge ${l.status==='active'?'warning':l.status==='completed'?'success':'gray'}">${l.status==='active'?'نشطة':l.status==='completed'?'مكتملة':'ملغاة'}</span></td>
       </tr>`).join('')}</tbody></table>`;
   },
+  
   async openForm() {
     const { data: emps } = await sb.from('employees').select('id, employee_number, full_name').is('deleted_at',null).eq('status','active').order('employee_number');
     const opts = (emps||[]).map(e=>`<option value="${e.id}">${esc(e.employee_number)} - ${esc(e.full_name)}</option>`).join('');
+    
     Modal.open('💳 سلفة جديدة', `
       <form id="loanForm">
         <label class="field"><span>الموظف *</span><select name="employee_id" required><option value="">— اختر —</option>${opts}</select></label>
@@ -1686,6 +2155,7 @@ const Loans = {
       </form>`,
       `<button class="btn btn-ghost" onclick="Modal.close()">إلغاء</button><button class="btn btn-primary" id="saveLoan">💾 حفظ</button>`
     );
+    
     $('#saveLoan').onclick = async () => {
       const fd = new FormData($('#loanForm'));
       const p = Object.fromEntries(fd.entries());
@@ -1694,6 +2164,7 @@ const Loans = {
       p.installment_amount = p.total_amount / p.installments_count;
       p.remaining_amount = p.total_amount;
       p.created_by = Auth.currentUser.id;
+      
       const { error } = await sb.from('loans').insert(p);
       if (error) return toast(error.message,'error');
       toast('✅ تم الإنشاء');
@@ -1703,6 +2174,9 @@ const Loans = {
   }
 };
 
+// ============================================
+// Terminations (ترك العمل)
+// ============================================
 const Terminations = {
   async render() {
     $('#pageContent').innerHTML = `
@@ -1712,10 +2186,14 @@ const Terminations = {
       <div class="table-wrap"><div class="table-scroll" id="termTable"></div></div>`;
     await this.load();
   },
+  
   async load() {
     const { data } = await sb.from('termination_records').select('*, employees(employee_number, full_name)').order('created_at',{ascending:false});
     const wrap = $('#termTable');
-    if (!data?.length) { wrap.innerHTML = `<div class="empty"><h3>لا توجد سجلات</h3></div>`; return; }
+    if (!data?.length) { 
+      wrap.innerHTML = `<div class="empty"><h3>لا توجد سجلات</h3></div>`; 
+      return; 
+    }
     wrap.innerHTML = `<table class="data"><thead><tr>
       <th>الموظف</th><th>التاريخ</th><th>السبب</th><th>نهاية الخدمة</th><th>المستحقات</th>
     </tr></thead><tbody>${data.map(t=>`
@@ -1727,9 +2205,11 @@ const Terminations = {
         <td class="num">${fmt(t.dues)}</td>
       </tr>`).join('')}</tbody></table>`;
   },
+  
   async openForm() {
     const { data: emps } = await sb.from('employees').select('id, employee_number, full_name').is('deleted_at',null).eq('status','active');
     const opts = (emps||[]).map(e=>`<option value="${e.id}">${esc(e.employee_number)} - ${esc(e.full_name)}</option>`).join('');
+    
     Modal.open('🚪 تسجيل ترك عمل', `
       <form id="termForm">
         <label class="field"><span>الموظف *</span><select name="employee_id" required>${opts}</select></label>
@@ -1743,14 +2223,17 @@ const Terminations = {
       </form>`,
       `<button class="btn btn-ghost" onclick="Modal.close()">إلغاء</button><button class="btn btn-primary" id="saveTerm">💾 حفظ</button>`
     );
+    
     $('#saveTerm').onclick = async () => {
       const fd = new FormData($('#termForm'));
       const p = Object.fromEntries(fd.entries());
       p.end_of_service = Number(p.end_of_service);
       p.dues = Number(p.dues);
       p.created_by = Auth.currentUser.id;
+      
       const { error } = await sb.from('termination_records').insert(p);
       if (error) return toast(error.message,'error');
+      
       await sb.from('employees').update({ status: 'terminated' }).eq('id', p.employee_id);
       toast('✅ تم');
       Modal.close();
@@ -1759,16 +2242,21 @@ const Terminations = {
   }
 };
 
+// ============================================
+// Treasuries (الخزائن)
+// ============================================
 const Treasuries = {
   async render() {
     if (!Auth.isAdmin()) return this.renderDeptManager();
     return this.renderAdmin();
   },
+  
   async renderAdmin() {
     const { data: treasuries } = await sb.from('treasuries').select('*, departments(name)').order('is_main', {ascending: false}).order('created_at');
     const mains = (treasuries || []).filter(t => t.is_main || !t.parent_treasury_id);
     const subs = (treasuries || []).filter(t => t.parent_treasury_id);
     const totalBalance = (treasuries || []).reduce((s, t) => s + Number(t.current_balance || 0), 0);
+    
     $('#pageContent').innerHTML = `
       <div class="page-header">
         <h1>🏦 الخزائن</h1><p>إدارة الخزائن الرئيسية والفرعية</p>
@@ -1788,10 +2276,14 @@ const Treasuries = {
       ${!treasuries?.length ? `<div class="empty"><div class="ico">🏦</div><h3>لا توجد خزائن</h3><button class="btn btn-primary" onclick="Treasuries.openForm()">➕ إنشاء</button></div>` : ''}
     `;
   },
+  
   renderMainCard(t) {
     return `<div class="card" style="border-top:4px solid var(--primary)">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px">
-        <div><div style="font-size:16px;font-weight:900">💵 ${esc(t.name)}</div><div style="font-size:12px;color:var(--text-2);margin-top:3px">${esc(t.departments?.name || 'رئيسية')}</div></div>
+        <div>
+          <div style="font-size:16px;font-weight:900">💵 ${esc(t.name)}</div>
+          <div style="font-size:12px;color:var(--text-2);margin-top:3px">${esc(t.departments?.name || 'رئيسية')}</div>
+        </div>
         <span class="badge info">رئيسية</span>
       </div>
       <div style="font-size:12px;color:var(--text-2)">الرصيد</div>
@@ -1800,13 +2292,21 @@ const Treasuries = {
         <button class="btn btn-success btn-sm" onclick="Treasuries.tx('${t.id}','deposit')">➕ تغذية</button>
         <button class="btn btn-info btn-sm" onclick="Treasuries.tx('${t.id}','transfer')">🔄 تحويل</button>
         <button class="btn btn-ghost btn-sm" onclick="Treasuries.history('${t.id}')">📜</button>
+        ${Auth.isAdmin() ? `
+          <button class="btn btn-warning btn-sm" onclick="Treasuries.edit('${t.id}')" title="تعديل">✏️</button>
+          <button class="btn btn-danger btn-sm" onclick="Treasuries.del('${t.id}','${esc(t.name)}')" title="حذف">🗑</button>
+        ` : ''}
       </div>
     </div>`;
   },
+  
   renderSubCard(t) {
     return `<div class="card" style="border-top:4px solid var(--info)">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px">
-        <div><div style="font-size:16px;font-weight:900">🏢 ${esc(t.name)}</div><div style="font-size:12px;color:var(--text-2);margin-top:3px">${esc(t.departments?.name || '—')}</div></div>
+        <div>
+          <div style="font-size:16px;font-weight:900">🏢 ${esc(t.name)}</div>
+          <div style="font-size:12px;color:var(--text-2);margin-top:3px">${esc(t.departments?.name || '—')}</div>
+        </div>
         <span class="badge ${t.type === 'cash' ? 'info' : 'purple'}">${t.type === 'cash' ? 'كاش' : 'بنك'}</span>
       </div>
       <div style="font-size:12px;color:var(--text-2)">الرصيد</div>
@@ -1814,12 +2314,18 @@ const Treasuries = {
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         <button class="btn btn-info btn-sm" onclick="Treasuries.tx('${t.id}','transfer')">🔄</button>
         <button class="btn btn-ghost btn-sm" onclick="Treasuries.history('${t.id}')">📜</button>
+        ${Auth.isAdmin() ? `
+          <button class="btn btn-warning btn-sm" onclick="Treasuries.edit('${t.id}')" title="تعديل">✏️</button>
+          <button class="btn btn-danger btn-sm" onclick="Treasuries.del('${t.id}','${esc(t.name)}')" title="حذف">🗑</button>
+        ` : ''}
       </div>
     </div>`;
   },
+  
   async renderDeptManager() {
     const myDept = Auth.currentProfile?.department_id;
     const { data: treasuries } = await sb.from('treasuries').select('*, departments(name)').or(`department_id.eq.${myDept},manager_id.eq.${Auth.currentUser.id}`);
+    
     $('#pageContent').innerHTML = `
       <div class="page-header"><h1>🏦 خزينة قسمي</h1><p>عرض فقط</p></div>
       ${!treasuries?.length ? `<div class="empty"><div class="ico">🏦</div><h3>لا توجد خزينة</h3></div>` : treasuries.map(t => `
@@ -1836,13 +2342,19 @@ const Treasuries = {
       `).join('')}
     `;
   },
-  async load() { if (!Auth.isAdmin()) return this.renderDeptManager(); return this.renderAdmin(); },
+  
+  async load() { 
+    if (!Auth.isAdmin()) return this.renderDeptManager(); 
+    return this.renderAdmin(); 
+  },
+  
   async openForm() {
     const deptOpts = Cache.departments.map(d => `<option value="${d.id}">${esc(d.name)}</option>`).join('');
     const { data: mainTreasuries } = await sb.from('treasuries').select('id, name').or('is_main.eq.true,parent_treasury_id.is.null');
     const parentOpts = (mainTreasuries || []).map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('');
     const { data: users } = await sb.from('profiles').select('id, full_name').eq('role', 'dept_manager');
     const managerOpts = (users || []).map(u => `<option value="${u.id}">${esc(u.full_name)}</option>`).join('');
+    
     Modal.open('🏦 خزينة جديدة', `
       <form id="treasForm">
         <label class="field"><span>نوع الخزينة *</span><select name="treasury_kind" id="treasuryKind" required>
@@ -1860,7 +2372,11 @@ const Treasuries = {
         <label class="field"><span>اسم البنك</span><input name="bank_name"></label>
       </form>
     `, `<button class="btn btn-ghost" onclick="Modal.close()">إلغاء</button><button class="btn btn-primary" id="saveTreas">💾 حفظ</button>`);
-    $('#treasuryKind').onchange = (e) => { $('#subOptions').style.display = e.target.value === 'sub' ? 'block' : 'none'; };
+    
+    $('#treasuryKind').onchange = (e) => { 
+      $('#subOptions').style.display = e.target.value === 'sub' ? 'block' : 'none'; 
+    };
+    
     $('#saveTreas').onclick = async () => {
       const form = $('#treasForm');
       if (!form.reportValidity()) return;
@@ -1874,18 +2390,123 @@ const Treasuries = {
       if (!payload.parent_treasury_id) payload.parent_treasury_id = null;
       if (!payload.manager_id) payload.manager_id = null;
       if (!payload.bank_name) payload.bank_name = null;
+      
       const btn = $('#saveTreas');
       btn.disabled = true;
       const { error } = await sb.from('treasuries').insert(payload);
       if (error) { toast('❌ ' + error.message, 'error'); btn.disabled = false; return; }
+      
       toast('✅ تم الإنشاء');
       Modal.close();
       Treasuries.load();
     };
   },
+  
+  async edit(id) {
+    const { data: t } = await sb.from('treasuries').select('*').eq('id', id).single();
+    if (!t) return toast('غير موجودة', 'error');
+    
+    const deptOpts = Cache.departments.map(d => 
+      `<option value="${d.id}" ${t.department_id === d.id ? 'selected' : ''}>${esc(d.name)}</option>`
+    ).join('');
+    
+    Modal.open('✏️ تعديل خزينة', `
+      <form id="treasEditForm">
+        <label class="field"><span>الاسم *</span><input name="name" required value="${esc(t.name)}"></label>
+        <label class="field"><span>النوع</span><select name="type">
+          <option value="cash" ${t.type === 'cash' ? 'selected' : ''}>💵 كاش</option>
+          <option value="bank" ${t.type === 'bank' ? 'selected' : ''}>🏛️ بنك</option>
+        </select></label>
+        <label class="field"><span>القسم</span><select name="department_id">
+          <option value="">— بدون —</option>${deptOpts}
+        </select></label>
+        <label class="field"><span>العملة</span><select name="currency">
+          <option value="SDG" ${t.currency === 'SDG' ? 'selected' : ''}>جنيه سوداني</option>
+          <option value="USD" ${t.currency === 'USD' ? 'selected' : ''}>دولار</option>
+        </select></label>
+        <label class="field"><span>اسم البنك</span><input name="bank_name" value="${esc(t.bank_name || '')}"></label>
+        <label class="field"><span>الحالة</span><select name="is_active">
+          <option value="true" ${t.is_active !== false ? 'selected' : ''}>✅ نشط</option>
+          <option value="false" ${t.is_active === false ? 'selected' : ''}>🚫 معطل</option>
+        </select></label>
+      </form>
+    `, `
+      <button class="btn btn-ghost" onclick="Modal.close()">إلغاء</button>
+      <button class="btn btn-primary" id="saveTreasEdit">💾 حفظ</button>
+    `);
+    
+    $('#saveTreasEdit').onclick = async () => {
+      const form = $('#treasEditForm');
+      if (!form.reportValidity()) return;
+      
+      const fd = new FormData(form);
+      const payload = Object.fromEntries(fd.entries());
+      payload.is_active = payload.is_active === 'true';
+      if (!payload.department_id) payload.department_id = null;
+      if (!payload.bank_name) payload.bank_name = null;
+      
+      const btn = $('#saveTreasEdit');
+      btn.disabled = true;
+      
+      const { error } = await sb.from('treasuries').update(payload).eq('id', id);
+      if (error) { 
+        toast('❌ ' + error.message, 'error'); 
+        btn.disabled = false; 
+        return; 
+      }
+      
+      toast('✅ تم التعديل');
+      Modal.close();
+      Treasuries.load();
+    };
+  },
+  
+  async del(id, name) {
+    const { count: txCount } = await sb.from('treasury_transactions')
+      .select('id', { count: 'exact', head: true })
+      .eq('treasury_id', id);
+    
+    const { count: payrollCount } = await sb.from('payroll_files')
+      .select('id', { count: 'exact', head: true })
+      .eq('treasury_id', id);
+    
+    let message = `حذف خزينة "<b>${esc(name)}</b>"؟`;
+    
+    if (txCount > 0 || payrollCount > 0) {
+      message = `⚠️ <b>تحذير!</b><br><br>
+        هذه الخزينة لديها:<br>
+        • ${txCount || 0} حركة مالية<br>
+        • ${payrollCount || 0} ملف رواتب مرتبط<br><br>
+        هل أنت متأكد من الحذف؟<br>
+        <b style="color:#dc2626">لا يمكن التراجع!</b>`;
+    }
+    
+    confirmModal('🗑 حذف خزينة', message, async () => {
+      try {
+        if (txCount > 0) {
+          await sb.from('treasury_transactions').delete().eq('treasury_id', id);
+        }
+        
+        if (payrollCount > 0) {
+          await sb.from('payroll_files').update({ treasury_id: null }).eq('treasury_id', id);
+        }
+        
+        const { error } = await sb.from('treasuries').delete().eq('id', id);
+        if (error) throw error;
+        
+        toast('✅ تم الحذف');
+        Treasuries.load();
+      } catch (err) {
+        console.error('Delete error:', err);
+        toast('❌ ' + err.message, 'error');
+      }
+    });
+  },
+  
   async tx(treasuryId, type) {
     const { data: treasury } = await sb.from('treasuries').select('*').eq('id', treasuryId).single();
     if (!treasury) return toast('غير موجودة', 'error');
+    
     let extraHtml = '';
     if (type === 'transfer') {
       let targetTreasuries;
@@ -1898,6 +2519,7 @@ const Treasuries = {
       }
       extraHtml = `<label class="field"><span>إلى خزينة *</span><select id="toTreasury" required><option value="">— اختر —</option>${targetTreasuries.map(t => `<option value="${t.id}">${esc(t.name)} (${fmt(t.current_balance)})</option>`).join('')}</select></label>`;
     }
+    
     Modal.open(type === 'deposit' ? '➕ تغذية' : '🔄 تحويل', `
       <div style="padding:14px;background:var(--bg-3);border-radius:10px;margin-bottom:16px">
         <div style="font-size:13px;color:var(--text-2)">الخزينة</div>
@@ -1909,45 +2531,66 @@ const Treasuries = {
       ${extraHtml}
       <label class="field"><span>البيان</span><input id="txDesc"></label>
     `, `<button class="btn btn-ghost" onclick="Modal.close()">إلغاء</button><button class="btn btn-primary" id="doTx">تنفيذ</button>`);
+    
     $('#doTx').onclick = async () => {
       const amount = Number($('#txAmount').value || 0);
       const desc = $('#txDesc').value.trim();
       if (amount <= 0) return toast('أدخل مبلغاً', 'warning');
+      
       const before = Number(treasury.current_balance);
       let after = type === 'deposit' ? before + amount : before - amount;
       if (after < 0) return toast('⚠️ الرصيد غير كافٍ', 'error');
+      
       const btn = $('#doTx');
       btn.disabled = true;
-      const txNo = 'TX-' + Date.now();
+      
+      const { data: txNoData } = await sb.rpc('gen_tx_no');
+      const txNo = txNoData || ('TX-' + Date.now());
+      
       const { error: txErr } = await sb.from('treasury_transactions').insert({
-        transaction_no: txNo, treasury_id: treasuryId,
+        transaction_no: txNo, 
+        treasury_id: treasuryId,
         type: type === 'transfer' ? 'transfer_out' : type,
-        amount, balance_before: before, balance_after: after,
-        description: desc || '—', user_id: Auth.currentUser.id
+        amount, 
+        balance_before: before, 
+        balance_after: after,
+        description: desc || '—', 
+        user_id: Auth.currentUser.id
       });
+      
       if (txErr) { toast('❌ ' + txErr.message, 'error'); btn.disabled = false; return; }
       await sb.from('treasuries').update({ current_balance: after }).eq('id', treasuryId);
+      
       if (type === 'transfer') {
         const toId = $('#toTreasury').value;
         if (!toId) return toast('اختر الخزينة', 'warning');
         const { data: toT } = await sb.from('treasuries').select('*').eq('id', toId).single();
         const toBefore = Number(toT.current_balance);
         const toAfter = toBefore + amount;
+        
         await sb.from('treasury_transactions').insert({
-          transaction_no: txNo + '-IN', treasury_id: toId, type: 'transfer_in',
-          amount, balance_before: toBefore, balance_after: toAfter,
-          description: (desc || 'تحويل') + ' من ' + treasury.name, user_id: Auth.currentUser.id
+          transaction_no: txNo + '-IN', 
+          treasury_id: toId, 
+          type: 'transfer_in',
+          amount, 
+          balance_before: toBefore, 
+          balance_after: toAfter,
+          description: (desc || 'تحويل') + ' من ' + treasury.name, 
+          user_id: Auth.currentUser.id
         });
         await sb.from('treasuries').update({ current_balance: toAfter }).eq('id', toId);
       }
+      
       toast('✅ تم');
       Modal.close();
       Treasuries.load();
     };
   },
+  
   async history(id) {
     const { data: t } = await sb.from('treasuries').select('name').eq('id', id).single();
     const { data: txs } = await sb.from('treasury_transactions').select('*').eq('treasury_id', id).order('created_at', { ascending: false }).limit(200);
+    
     Modal.open(`📜 حركات ${esc(t?.name || '')}`, `
       <div class="table-scroll"><table class="data">
         <thead><tr><th>رقم</th><th>التاريخ</th><th>النوع</th><th>المبلغ</th><th>قبل</th><th>بعد</th><th>البيان</th></tr></thead>
@@ -1967,6 +2610,9 @@ const Treasuries = {
   }
 };
 
+// ============================================
+// Journal (القيود اليومية)
+// ============================================
 const Journal = {
   async render() {
     $('#pageContent').innerHTML = `
@@ -1974,10 +2620,14 @@ const Journal = {
       <div class="table-wrap"><div class="table-scroll" id="journalTable"></div></div>`;
     await this.load();
   },
+  
   async load() {
     const { data } = await sb.from('journal_entries').select('*, departments(name), payroll_files(name)').order('created_at',{ascending:false}).limit(200);
     const wrap = $('#journalTable');
-    if (!data?.length) { wrap.innerHTML = `<div class="empty"><h3>لا توجد قيود</h3></div>`; return; }
+    if (!data?.length) { 
+      wrap.innerHTML = `<div class="empty"><h3>لا توجد قيود</h3></div>`; 
+      return; 
+    }
     wrap.innerHTML = `<table class="data"><thead><tr>
       <th>رقم</th><th>التاريخ</th><th>الملف</th><th>القسم</th><th>المبلغ</th><th>البيان</th>
     </tr></thead><tbody>${data.map(j=>`
@@ -1992,9 +2642,13 @@ const Journal = {
   }
 };
 
+// ============================================
+// Notifications (الإشعارات)
+// ============================================
 const Notifications = {
   async render() {
     const { data } = await sb.from('notifications').select('*').eq('user_id', Auth.currentUser.id).order('created_at', {ascending: false}).limit(100);
+    
     $('#pageContent').innerHTML = `
       <div class="page-header">
         <h1>🔔 الإشعارات</h1><p>كل الإشعارات</p>
@@ -2020,6 +2674,7 @@ const Notifications = {
       </div>
     `;
   },
+  
   async markAllRead() {
     await sb.from('notifications').update({ is_read: true }).eq('user_id', Auth.currentUser.id);
     toast('✅ تم');
@@ -2027,6 +2682,9 @@ const Notifications = {
   }
 };
 
+// ============================================
+// Users (المستخدمون)
+// ============================================
 const PERMISSIONS_LIST = [
   { key: 'view_employees', label: 'مشاهدة الموظفين', icon: '👁️' },
   { key: 'add_employee', label: 'إضافة موظف', icon: '➕' },
@@ -2045,7 +2703,11 @@ const PERMISSIONS_LIST = [
 
 const Users = {
   async render() {
-    if (!Auth.isAdmin()) { $('#pageContent').innerHTML = `<div class="empty"><h3>🔒 للمدير فقط</h3></div>`; return; }
+    if (!Auth.isAdmin()) { 
+      $('#pageContent').innerHTML = `<div class="empty"><h3>🔒 للمدير فقط</h3></div>`; 
+      return; 
+    }
+    
     $('#pageContent').innerHTML = `
       <div class="page-header">
         <h1>👤 المستخدمون</h1><p>إدارة المستخدمين والصلاحيات</p>
@@ -2054,14 +2716,20 @@ const Users = {
       <div class="table-wrap"><div class="table-scroll" id="usersTable"></div></div>`;
     await this.load();
   },
+  
   async load() {
     const { data } = await sb.from('profiles').select('*').order('created_at', {ascending: false});
     const wrap = $('#usersTable');
-    if (!data?.length) { wrap.innerHTML = `<div class="empty"><h3>لا يوجد مستخدمون</h3></div>`; return; }
+    if (!data?.length) { 
+      wrap.innerHTML = `<div class="empty"><h3>لا يوجد مستخدمون</h3></div>`; 
+      return; 
+    }
+    
     const deptIds = [...new Set(data.map(u => u.department_id).filter(Boolean))];
     const { data: depts } = deptIds.length ? await sb.from('departments').select('id, name').in('id', deptIds) : { data: [] };
     const deptMap = {};
     (depts || []).forEach(d => { deptMap[d.id] = d.name; });
+    
     wrap.innerHTML = `<table class="data">
       <thead><tr><th>الاسم</th><th>الدور</th><th>القسم</th><th>الحالة</th><th>إجراءات</th></tr></thead>
       <tbody>${data.map(u => `
@@ -2077,6 +2745,7 @@ const Users = {
         </tr>`).join('')}</tbody>
     </table>`;
   },
+  
   async openForm(id) {
     let u = null;
     let userPerms = [];
@@ -2086,6 +2755,7 @@ const Users = {
       const { data: perms } = await sb.from('permissions').select('permission_key').eq('profile_id', id);
       userPerms = (perms || []).map(p => p.permission_key);
     }
+    
     const deptOpts = Cache.departments.map(d => `<option value="${d.id}" ${u?.department_id===d.id?'selected':''}>${esc(d.name)}</option>`).join('');
     const permCheckboxes = PERMISSIONS_LIST.map(p => `
       <label style="display:flex;align-items:center;gap:8px;padding:10px;background:var(--bg-3);border-radius:10px;cursor:pointer;font-size:13px">
@@ -2093,6 +2763,7 @@ const Users = {
         <span>${p.icon} ${p.label}</span>
       </label>
     `).join('');
+    
     Modal.open(id ? `✏️ تعديل: ${esc(u.full_name)}` : '➕ مستخدم جديد', `
       <form id="userForm" class="form-grid">
         <label class="field full"><span>الاسم الكامل *</span><input name="full_name" required value="${esc(u?.full_name||'')}"></label>
@@ -2104,7 +2775,7 @@ const Users = {
           <option value="dept_manager" ${u?.role==='dept_manager'?'selected':''}>👤 مسؤول قسم</option>
           <option value="admin" ${u?.role==='admin'?'selected':''}>👑 مدير</option>
         </select></label>
-        <label class="field"><span>القسم</span><select name="department_id"><option value="">— بدون —</option>${deptOpts}</select></label>
+        <label class="field"><span>القسم *</span><select name="department_id" id="userDeptSelect"><option value="">— اختر —</option>${deptOpts}</select></label>
         <label class="field full"><span>الحالة</span><select name="is_active">
           <option value="true" ${u?.is_active!==false?'selected':''}>✅ نشط</option>
           <option value="false" ${u?.is_active===false?'selected':''}>🚫 معطل</option>
@@ -2115,57 +2786,102 @@ const Users = {
         </div>
       </form>
     `, `<button class="btn btn-ghost" onclick="Modal.close()">إلغاء</button><button class="btn btn-primary" id="saveUser">💾 ${id?'حفظ':'إنشاء'}</button>`, {size: 'lg'});
-    $('#userRoleSelect').onchange = (e) => { $('#permsSection').style.display = e.target.value === 'admin' ? 'none' : ''; };
+    
+    $('#userRoleSelect').onchange = (e) => { 
+      $('#permsSection').style.display = e.target.value === 'admin' ? 'none' : ''; 
+    };
+    
     $('#saveUser').onclick = async () => {
       const form = $('#userForm');
       if (!form.reportValidity()) return;
       const fd = new FormData(form);
       const payload = Object.fromEntries(fd.entries());
+      
+      // ✅ تحقق: مسؤول القسم يجب أن يكون له قسم
+      if (payload.role === 'dept_manager' && !payload.department_id) {
+        return toast('⚠️ مسؤول القسم يجب أن يكون له قسم محدد', 'error');
+      }
+      
       const permissions = PERMISSIONS_LIST.filter(p => fd.get(`perm_${p.key}`)).map(p => p.key);
       payload.permissions = permissions;
       if (payload.department_id === '') payload.department_id = null;
+      
       const btn = $('#saveUser');
       btn.disabled = true;
+      
       try {
         const { data: { session } } = await sb.auth.getSession();
         const response = await fetch(`${SUPABASE_URL}/functions/v1/create-user`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}`, 'apikey': SUPABASE_ANON_KEY },
+          headers: { 
+            'Content-Type': 'application/json', 
+            'Authorization': `Bearer ${session.access_token}`, 
+            'apikey': SUPABASE_ANON_KEY 
+          },
           body: JSON.stringify({
-            action: id ? 'update' : 'create', user_id: id, email: payload.email, password: payload.password,
-            full_name: payload.full_name, role: payload.role, department_id: payload.department_id,
-            is_active: payload.is_active === 'true', permissions: payload.permissions
+            action: id ? 'update' : 'create', 
+            user_id: id, 
+            email: payload.email, 
+            password: payload.password,
+            full_name: payload.full_name, 
+            role: payload.role, 
+            department_id: payload.department_id,
+            is_active: payload.is_active === 'true', 
+            permissions: payload.permissions
           })
         });
+        
         const result = await response.json();
-        if (!response.ok || result.error) { toast('❌ ' + (result.error || 'فشل'), 'error'); btn.disabled = false; return; }
+        if (!response.ok || result.error) { 
+          toast('❌ ' + (result.error || 'فشل'), 'error'); 
+          btn.disabled = false; 
+          return; 
+        }
+        
         toast(id ? '✅ تم التحديث' : '✅ تم الإنشاء');
         Modal.close();
         Users.load();
-      } catch (err) { toast('❌ ' + err.message, 'error'); btn.disabled = false; }
+      } catch (err) { 
+        toast('❌ ' + err.message, 'error'); 
+        btn.disabled = false; 
+      }
     };
   },
+  
   async del(id, name) {
     confirmModal('🗑 حذف مستخدم', `حذف <b>${esc(name)}</b> نهائياً؟`, async () => {
       try {
         const { data: { session } } = await sb.auth.getSession();
         const response = await fetch(`${SUPABASE_URL}/functions/v1/create-user`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}`, 'apikey': SUPABASE_ANON_KEY },
+          headers: { 
+            'Content-Type': 'application/json', 
+            'Authorization': `Bearer ${session.access_token}`, 
+            'apikey': SUPABASE_ANON_KEY 
+          },
           body: JSON.stringify({ action: 'delete', user_id: id })
         });
         const result = await response.json();
         if (!response.ok || result.error) return toast('❌ ' + result.error, 'error');
         toast('✅ تم الحذف');
         Users.load();
-      } catch (err) { toast('❌ ' + err.message, 'error'); }
+      } catch (err) { 
+        toast('❌ ' + err.message, 'error'); 
+      }
     });
   }
 };
 
+// ============================================
+// Settings (الإعدادات)
+// ============================================
 const Settings = {
   async render() {
-    if (!Auth.isAdmin()) { $('#pageContent').innerHTML = `<div class="empty"><h3>🔒 للمدير فقط</h3></div>`; return; }
+    if (!Auth.isAdmin()) { 
+      $('#pageContent').innerHTML = `<div class="empty"><h3>🔒 للمدير فقط</h3></div>`; 
+      return; 
+    }
+    
     const s = Cache.settings || {};
     $('#pageContent').innerHTML = `
       <div class="page-header"><h1>⚙️ الإعدادات</h1><p>إعدادات المصنع</p></div>
@@ -2179,7 +2895,8 @@ const Settings = {
         </div>
         <div class="card">
           <h3 style="margin-bottom:16px">💰 الرواتب</h3>
-          <label class="field"><span>أيام الشهر (لحساب الأجر اليومي)</span><input type="number" id="st_default_month_days" value="${s.default_month_days||30}"></label>
+          <label class="field"><span>أيام الشهر (للشهري)</span><input type="number" id="st_default_month_days" value="${s.default_month_days||30}"></label>
+          <label class="field"><span>أيام الأسبوع (للأسبوعي)</span><input type="number" id="st_default_week_days" value="${s.default_week_days||7}"></label>
           <label class="field"><span>حد الإنذارات</span><input type="number" id="st_max_warnings" value="${s.max_warnings||3}"></label>
         </div>
         <div class="card">
@@ -2198,14 +2915,20 @@ const Settings = {
       <div style="margin-top:24px"><button class="btn btn-primary btn-lg" id="saveSettings" style="max-width:340px">💾 حفظ</button></div>
       ${Auth.isAdmin() ? this.dangerZoneHTML() : ''}
     `;
+    
     $('#saveSettings').onclick = async () => {
-      const keys = ['factory_name','factory_phone','factory_address','factory_logo_url','default_month_days','max_warnings','insurance_total','insurance_employee','insurance_company','employee_prefix','receipt_prefix','journal_prefix'];
-      for (const k of keys) { await sb.from('system_settings').upsert({key:k, value: $('#st_'+k).value}); }
+      const keys = ['factory_name','factory_phone','factory_address','factory_logo_url','default_month_days','default_week_days','max_warnings','insurance_total','insurance_employee','insurance_company','employee_prefix','receipt_prefix','journal_prefix'];
+      for (const k of keys) { 
+        const el = $('#st_'+k);
+        if (el) await sb.from('system_settings').upsert({key:k, value: el.value});
+      }
       toast('✅ تم الحفظ');
       await Cache.load();
     };
+    
     $('#resetDataBtn')?.addEventListener('click', () => Settings.confirmReset());
   },
+  
   dangerZoneHTML() {
     return `<div class="card" style="margin-top:36px;border:2px solid #ef4444;background:#fef2f2">
       <h3 style="margin-bottom:10px;color:#991b1b">⚠️ منطقة الخطر</h3>
@@ -2213,6 +2936,7 @@ const Settings = {
       <button class="btn btn-danger" id="resetDataBtn" style="padding:16px 28px">🗑️ تصفير كل البيانات</button>
     </div>`;
   },
+  
   confirmReset() {
     Modal.open('⚠️ تأكيد التصفير', `
       <div style="text-align:center;padding:10px 0">
@@ -2222,10 +2946,12 @@ const Settings = {
         <input type="text" id="confirmText" style="width:100%;padding:14px;margin-top:12px;border:2px solid #fecaca;border-radius:10px;font-size:16px;text-align:center">
       </div>
     `, `<button class="btn btn-ghost" onclick="Modal.close()">إلغاء</button><button class="btn btn-danger" id="confirmResetBtn" disabled>🗑️ تأكيد</button>`);
+    
     const ci = $('#confirmText');
     const cb = $('#confirmResetBtn');
     ci.focus();
     ci.oninput = () => { const ok = ci.value.trim() === 'تصفير'; cb.disabled = !ok; };
+    
     cb.onclick = async () => {
       if (ci.value.trim() !== 'تصفير') return;
       Modal.close();
@@ -2240,29 +2966,202 @@ const Settings = {
   }
 };
 
+// ============================================
+// Audit (سجل العمليات) — محسّن
+// ============================================
 const Audit = {
+  _cache: [],
+  
   async log(action, entityType, entityId, oldVal=null, newVal=null, description=null) {
-    try { await sb.from('audit_logs').insert({ user_id: Auth.currentUser?.id, action, entity_type: entityType, entity_id: entityId, old_value: oldVal, new_value: newVal, description: description || `${action} ${entityType}` }); } catch(e) { console.warn('audit failed', e); }
+    try { 
+      await sb.from('audit_logs').insert({ 
+        user_id: Auth.currentUser?.id, 
+        action, 
+        entity_type: entityType, 
+        entity_id: entityId, 
+        old_value: oldVal, 
+        new_value: newVal, 
+        description: description || `${action} ${entityType}` 
+      }); 
+    } catch(e) { console.warn('audit failed', e); }
   },
+  
   async render() {
-    if (!Auth.isAdmin()) { $('#pageContent').innerHTML = `<div class="empty"><h3>🔒 للمدير فقط</h3></div>`; return; }
-    $('#pageContent').innerHTML = `<div class="page-header"><h1>📝 سجل العمليات</h1><p>كل العمليات الحساسة</p></div><div class="table-wrap"><div class="table-scroll" id="auditTable"></div></div>`;
-    const { data } = await sb.from('audit_logs').select('*, profiles(full_name)').order('created_at',{ascending:false}).limit(500);
+    if (!Auth.isAdmin()) { 
+      $('#pageContent').innerHTML = `<div class="empty"><h3>🔒 للمدير فقط</h3></div>`; 
+      return; 
+    }
+    
+    $('#pageContent').innerHTML = `
+      <div class="page-header">
+        <h1>📝 سجل العمليات</h1>
+        <p>كل العمليات الحساسة في النظام</p>
+        <div class="page-actions">
+          <button class="btn btn-primary" onclick="Audit.exportExcel()">📊 تصدير Excel</button>
+          <button class="btn btn-ghost" onclick="Audit.load()">🔄 تحديث</button>
+        </div>
+      </div>
+      
+      <div class="card" style="margin-bottom:20px">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px">
+          <label class="field" style="margin:0">
+            <span>🔍 بحث</span>
+            <input id="auditSearch" placeholder="بحث في الوصف...">
+          </label>
+          <label class="field" style="margin:0">
+            <span>📅 من تاريخ</span>
+            <input type="date" id="auditFrom">
+          </label>
+          <label class="field" style="margin:0">
+            <span>📅 إلى تاريخ</span>
+            <input type="date" id="auditTo">
+          </label>
+          <label class="field" style="margin:0">
+            <span>🎯 نوع العملية</span>
+            <select id="auditAction">
+              <option value="">الكل</option>
+              <option value="payroll_paid">💸 دفع رواتب</option>
+              <option value="single_payment">💵 دفع فردي</option>
+              <option value="payroll_created">📝 إنشاء ملف</option>
+              <option value="employee_added">👤 إضافة موظف</option>
+              <option value="employee_deleted">🗑 حذف موظف</option>
+              <option value="reset_data">⚠️ تصفير بيانات</option>
+            </select>
+          </label>
+        </div>
+        <div style="margin-top:12px;display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap">
+          <span id="auditCounter" style="font-size:12px;color:var(--text-2);font-weight:700">— سجل</span>
+          <button class="btn btn-ghost btn-sm" onclick="Audit.clearFilters()">🗑 مسح الفلاتر</button>
+        </div>
+      </div>
+      
+      <div class="table-wrap"><div class="table-scroll" id="auditTable"></div></div>
+    `;
+    
+    await this.load();
+    
+    $('#auditSearch').oninput = () => this.renderTable();
+    $('#auditFrom').onchange = () => this.renderTable();
+    $('#auditTo').onchange = () => this.renderTable();
+    $('#auditAction').onchange = () => this.renderTable();
+  },
+  
+  async load() {
+    const { data } = await sb.from('audit_logs')
+      .select('*, profiles(full_name)')
+      .order('created_at', {ascending:false})
+      .limit(1000);
+    
+    this._cache = data || [];
+    this.renderTable();
+  },
+  
+  renderTable() {
+    const search = ($('#auditSearch')?.value || '').toLowerCase().trim();
+    const from = $('#auditFrom')?.value;
+    const to = $('#auditTo')?.value;
+    const action = $('#auditAction')?.value;
+    
+    let list = this._cache;
+    
+    if (search) {
+      list = list.filter(a => 
+        (a.description || '').toLowerCase().includes(search) ||
+        (a.action || '').toLowerCase().includes(search) ||
+        (a.profiles?.full_name || '').toLowerCase().includes(search)
+      );
+    }
+    
+    if (from) list = list.filter(a => a.created_at >= from);
+    if (to) list = list.filter(a => a.created_at <= to + 'T23:59:59');
+    if (action) list = list.filter(a => a.action === action);
+    
+    const counter = $('#auditCounter');
+    if (counter) counter.textContent = `${list.length} سجل من ${this._cache.length}`;
+    
     const wrap = $('#auditTable');
-    if (!data?.length) { wrap.innerHTML = `<div class="empty"><h3>لا يوجد سجل</h3></div>`; return; }
-    wrap.innerHTML = `<table class="data"><thead><tr>
-      <th>التاريخ</th><th>المستخدم</th><th>العملية</th><th>النوع</th><th>الوصف</th>
-    </tr></thead><tbody>${data.map(a=>`
-      <tr>
-        <td>${fmtDate(a.created_at)}</td>
-        <td>${esc(a.profiles?.full_name||'—')}</td>
-        <td><span class="badge info">${esc(a.action)}</span></td>
-        <td>${esc(a.entity_type||'')}</td>
-        <td>${esc(a.description||'')}</td>
-      </tr>`).join('')}</tbody></table>`;
+    if (!list.length) { 
+      wrap.innerHTML = `<div class="empty"><h3>لا يوجد سجل مطابق</h3></div>`; 
+      return; 
+    }
+    
+    wrap.innerHTML = `<table class="data">
+      <thead><tr>
+        <th>#</th>
+        <th>التاريخ</th>
+        <th>الوقت</th>
+        <th>المستخدم</th>
+        <th>العملية</th>
+        <th>النوع</th>
+        <th>الوصف</th>
+      </tr></thead>
+      <tbody>${list.map((a, i) => {
+        const dt = new Date(a.created_at);
+        const dateStr = dt.toLocaleDateString('ar-EG');
+        const timeStr = dt.toLocaleTimeString('ar-EG', {hour:'2-digit', minute:'2-digit'});
+        
+        const actionLabel = {
+          'payroll_paid': '💸 دفع رواتب',
+          'single_payment': '💵 دفع فردي',
+          'payroll_created': '📝 إنشاء ملف',
+          'employee_added': '👤 إضافة موظف',
+          'employee_deleted': '🗑 حذف موظف',
+          'reset_data': '⚠️ تصفير',
+        }[a.action] || a.action;
+        
+        return `<tr>
+          <td>${i + 1}</td>
+          <td>${dateStr}</td>
+          <td style="font-size:12px;color:var(--text-2)">${timeStr}</td>
+          <td><b>${esc(a.profiles?.full_name || '—')}</b></td>
+          <td><span class="badge info">${esc(actionLabel)}</span></td>
+          <td style="font-size:12px">${esc(a.entity_type || '')}</td>
+          <td style="font-size:12px">${esc(a.description || '')}</td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table>`;
+  },
+  
+  clearFilters() {
+    if ($('#auditSearch')) $('#auditSearch').value = '';
+    if ($('#auditFrom')) $('#auditFrom').value = '';
+    if ($('#auditTo')) $('#auditTo').value = '';
+    if ($('#auditAction')) $('#auditAction').value = '';
+    this.renderTable();
+  },
+  
+  exportExcel() {
+    const search = ($('#auditSearch')?.value || '').toLowerCase().trim();
+    const from = $('#auditFrom')?.value;
+    const to = $('#auditTo')?.value;
+    const action = $('#auditAction')?.value;
+    
+    let list = this._cache;
+    if (search) list = list.filter(a => (a.description || '').toLowerCase().includes(search) || (a.profiles?.full_name || '').toLowerCase().includes(search));
+    if (from) list = list.filter(a => a.created_at >= from);
+    if (to) list = list.filter(a => a.created_at <= to + 'T23:59:59');
+    if (action) list = list.filter(a => a.action === action);
+    
+    const headers = ['التاريخ', 'الوقت', 'المستخدم', 'العملية', 'النوع', 'الوصف'];
+    const rows = list.map(a => {
+      const dt = new Date(a.created_at);
+      return [
+        dt.toLocaleDateString('ar-EG'),
+        dt.toLocaleTimeString('ar-EG'),
+        a.profiles?.full_name || '—',
+        a.action,
+        a.entity_type || '',
+        a.description || ''
+      ];
+    });
+    
+    Reports.exportExcel('سجل_العمليات', headers, rows);
   }
 };
 
+// ============================================
+// Earnings / Deductions (البنود)
+// ============================================
 function buildTypePage(table, title, icon) {
   return {
     async render() {
@@ -2270,9 +3169,14 @@ function buildTypePage(table, title, icon) {
         <div class="page-header"><h1>${icon} ${title}</h1><p>إدارة بنود ${title}</p>
         <div class="page-actions"><button class="btn btn-primary" onclick="TypeEditor.open('${table}','${title}')">➕ إضافة بند</button></div></div>
         <div class="table-wrap"><div class="table-scroll" id="typeTable_${table}"></div></div>`;
+      
       const { data } = await sb.from(table).select('*').order('sort_order');
       const wrap = $(`#typeTable_${table}`);
-      if (!data?.length) { wrap.innerHTML = `<div class="empty"><h3>لا توجد بنود</h3></div>`; return; }
+      if (!data?.length) { 
+        wrap.innerHTML = `<div class="empty"><h3>لا توجد بنود</h3></div>`; 
+        return; 
+      }
+      
       wrap.innerHTML = `<table class="data"><thead><tr><th>الاسم</th><th>نظامي</th><th>الحالة</th><th>إجراءات</th></tr></thead>
         <tbody>${data.map(t=>`<tr>
           <td><b>${esc(t.name)}</b></td>
@@ -2283,6 +3187,7 @@ function buildTypePage(table, title, icon) {
     }
   };
 }
+
 const Earnings = buildTypePage('earning_types', 'الاستحقاقات', '➕');
 const Deductions = buildTypePage('deduction_types', 'الاستقطاعات', '➖');
 
@@ -2290,6 +3195,7 @@ const TypeEditor = {
   async open(table, title, id) {
     let t = null;
     if (id) ({data:t} = await sb.from(table).select('*').eq('id', id).single());
+    
     Modal.open(id?'✏️ تعديل بند':'➕ بند جديد', `
       <form id="typeForm">
         <label class="field"><span>الاسم *</span><input name="name" required value="${esc(t?.name||'')}"></label>
@@ -2300,12 +3206,15 @@ const TypeEditor = {
       </form>`,
       `<button class="btn btn-ghost" onclick="Modal.close()">إلغاء</button><button class="btn btn-primary" id="saveT">💾 حفظ</button>`
     );
+    
     $('#saveT').onclick = async () => {
       const fd = new FormData($('#typeForm'));
       const payload = Object.fromEntries(fd.entries());
       payload.is_active = payload.is_active === 'true';
+      
       const res = id ? await sb.from(table).update(payload).eq('id',id) : await sb.from(table).insert(payload);
       if (res.error) return toast(res.error.message,'error');
+      
       toast('✅ تم');
       await Cache.load();
       Modal.close();
@@ -2315,22 +3224,41 @@ const TypeEditor = {
   }
 };
 
+// ============================================
+// Router (الموجّه)
+// ============================================
 const Router = {
   current: 'dashboard',
+  
   get pages() {
     return {
-      dashboard: Dashboard, employees: Employees, departments: Departments,
-      attendance: Attendance, warnings: Warnings, payroll: Payroll,
-      loans: Loans, treasuries: Treasuries, journal: Journal,
-      reports: Reports, users: Users, settings: Settings,
-      audit: Audit, notifications: Notifications,
-      terminations: Terminations, earnings: Earnings, deductions: Deductions,
+      dashboard: Dashboard, 
+      employees: Employees, 
+      departments: Departments,
+      attendance: Attendance, 
+      warnings: Warnings, 
+      payroll: Payroll,
+      loans: Loans, 
+      treasuries: Treasuries, 
+      journal: Journal,
+      reports: Reports, 
+      users: Users, 
+      settings: Settings,
+      audit: Audit, 
+      notifications: Notifications,
+      terminations: Terminations, 
+      earnings: Earnings, 
+      deductions: Deductions,
       'attendance-report': AttendanceReport
     };
   },
+  
   go(page) {
     const obj = this.pages[page];
-    if (!obj || typeof obj.render !== 'function') return;
+    if (!obj || typeof obj.render !== 'function') {
+      console.warn('Page not found:', page);
+      return;
+    }
     this.current = page;
     $$('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.page === page));
     $('#sidebar').classList.remove('open');
@@ -2340,13 +3268,22 @@ const Router = {
   }
 };
 
+// ============================================
+// Global Search (البحث السريع)
+// ============================================
 const GlobalSearch = {
   async search(q) {
     if (!q || q.length < 2) { Modal.close(); return; }
+    
     const [emps, receipts] = await Promise.all([
-      sb.from('employees').select('id, employee_number, full_name').or(`full_name.ilike.%${q}%,employee_number.ilike.%${q}%,phone.ilike.%${q}%`).limit(10),
-      sb.from('receipts').select('receipt_no, amount, employees(full_name)').ilike('receipt_no', `%${q}%`).limit(10)
+      sb.from('employees').select('id, employee_number, full_name')
+        .or(`full_name.ilike.%${q}%,employee_number.ilike.%${q}%,phone.ilike.%${q}%`)
+        .limit(10),
+      sb.from('receipts').select('receipt_no, amount, employees(full_name)')
+        .ilike('receipt_no', `%${q}%`)
+        .limit(10)
     ]);
+    
     Modal.open(`🔎 نتائج: "${esc(q)}"`, `
       ${emps.data?.length?`<h4 style="margin-bottom:8px">👥 الموظفون</h4>
         <div class="table-scroll"><table class="data"><tbody>
@@ -2362,6 +3299,9 @@ const GlobalSearch = {
   }
 };
 
+// ============================================
+// Boot (تشغيل النظام)
+// ============================================
 (async function boot() {
   try {
     Theme.init();
@@ -2386,11 +3326,18 @@ const GlobalSearch = {
     $('#themeBtn').onclick = () => Theme.toggle();
 
     const checkNotifs = async () => {
-      const { count } = await sb.from('notifications').select('id', {count: 'exact', head: true}).eq('user_id', Auth.currentUser.id).eq('is_read', false);
+      const { count } = await sb.from('notifications')
+        .select('id', {count: 'exact', head: true})
+        .eq('user_id', Auth.currentUser.id)
+        .eq('is_read', false);
       const badge = $('#notifBadge');
       if (badge) {
-        if (count > 0) { badge.textContent = count; badge.style.display = 'inline-block'; }
-        else badge.style.display = 'none';
+        if (count > 0) { 
+          badge.textContent = count; 
+          badge.style.display = 'inline-block'; 
+        } else {
+          badge.style.display = 'none';
+        }
       }
     };
     await checkNotifs();
@@ -2417,6 +3364,9 @@ const GlobalSearch = {
   }
 })();
 
+// ============================================
+// تحديث واجهة المستخدم
+// ============================================
 function updateUserUI(profile) {
   const nameEl = $('#userName');
   const roleEl = $('#userRole');
@@ -2425,3 +3375,7 @@ function updateUserUI(profile) {
   if (roleEl) roleEl.textContent = profile.role === 'admin' ? '👑 مدير النظام' : '👤 مسؤول قسم';
   if (avatarEl) avatarEl.textContent = (profile.full_name || '؟').trim().charAt(0);
 }
+
+// ============================================
+// ✅ نهاية app.js
+// ============================================

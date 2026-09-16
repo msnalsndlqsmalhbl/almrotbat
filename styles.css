@@ -1,6 +1,6 @@
 /* ============================================
    🏭 مصنع الصندل — نظام المرتبات 2026
-   Premium ERP Design System - FINAL
+   Premium ERP Design System - v3.1
    ============================================ */
 
 :root {
@@ -241,7 +241,11 @@ input, select, textarea { font-family: inherit; color: inherit; text-align: righ
   transition: all 0.2s;
   cursor: pointer;
   margin-top: 8px;
+  display: flex;
+  align-items: center;
   justify-content: center;
+  gap: 8px;
+  border: none;
 }
 .login-card .btn-lg:hover {
   transform: translateY(-2px);
@@ -634,8 +638,111 @@ input, select, textarea { font-family: inherit; color: inherit; text-align: righ
   margin-top: 14px;
 }
 
+/* ---------- OVERLAY (Mobile) ---------- */
+.overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(10,15,30,.5);
+  z-index: 99;
+  opacity: 0;
+  transition: opacity var(--t);
+}
+.overlay.show {
+  display: block;
+  opacity: 1;
+}
+
 /* ============================================
-   5. CARDS & GRIDS
+   5. TOASTS
+   ============================================ */
+#toast-container {
+  position: fixed;
+  top: 20px;
+  left: 20px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: none;
+  max-width: 380px;
+}
+.toast {
+  background: var(--bg-2);
+  color: var(--text);
+  padding: 14px 20px;
+  border-radius: 12px;
+  box-shadow: var(--sh-lg);
+  font-weight: 700;
+  font-size: 14px;
+  border-right: 4px solid var(--primary);
+  animation: toastIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  pointer-events: auto;
+  min-width: 250px;
+}
+.toast.success { border-color: var(--success); }
+.toast.error { border-color: var(--danger); }
+.toast.warning { border-color: var(--warning); }
+.toast.info { border-color: var(--info); }
+
+@keyframes toastIn {
+  from { transform: translateX(-30px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+/* ============================================
+   6. RESPONSIVE
+   ============================================ */
+@media (max-width: 1024px) {
+  :root { --sidebar-w: 260px; }
+}
+
+@media (max-width: 768px) {
+  .sidebar {
+    transform: translateX(100%);
+    width: 280px;
+  }
+  .sidebar.open { transform: translateX(0); }
+  
+  .main { margin-right: 0; max-width: 100vw; }
+  .topbar .menu-btn { display: block; }
+  .topbar-search { max-width: none; }
+  .topbar-search .kbd { display: none; }
+  
+  .page { padding: 16px; }
+  .page-header h1 { font-size: 22px; }
+  
+  .grid-3, .grid-4 { grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); }
+  
+  .form-grid { grid-template-columns: 1fr; }
+  .form-grid .full { grid-column: auto; }
+  
+  .modal {
+    max-width: calc(100vw - 20px);
+    max-height: calc(100vh - 20px);
+  }
+  .modal-body { padding: 18px; }
+  .modal-header, .modal-footer { padding: 14px 18px; }
+  
+  #toast-container {
+    top: auto;
+    bottom: 20px;
+    left: 10px;
+    right: 10px;
+    max-width: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .page-header h1 { font-size: 20px; }
+  .btn { padding: 10px 16px; font-size: 13px; }
+  .btn-sm { padding: 6px 10px; font-size: 12px; }
+  .stat .value { font-size: 18px; }
+  .stat .ico { width: 42px; height: 42px; font-size: 18px; }
+}
+
+/* ============================================
+   7. CARDS & GRIDS
    ============================================ */
 .card {
   background: var(--bg-2);
@@ -667,7 +774,7 @@ input, select, textarea { font-family: inherit; color: inherit; text-align: righ
 .grid-4 { grid-template-columns: repeat(auto-fit, minmax(min(230px, 100%), 1fr)); }
 
 /* ============================================
-   6. STAT CARDS
+   8. STAT CARDS
    ============================================ */
 .stat {
   background: var(--bg-2);
@@ -729,7 +836,7 @@ input, select, textarea { font-family: inherit; color: inherit; text-align: righ
 }
 
 /* ============================================
-   7. TABLES
+   9. TABLES
    ============================================ */
 .table-wrap {
   background: var(--bg-2);
@@ -824,8 +931,7 @@ table.data tfoot td {
   border-top: 2px solid var(--border);
 }
 
-/* الأرقام في مكانها */
-/* الأرقام في الجداول - محاذاة يمين */
+/* الأرقام - محاذاة يمين */
 .num,
 table.data td.num,
 table.data th.num,
@@ -845,7 +951,7 @@ table.data tfoot td.num {
 }
 
 /* ============================================
-   8. BADGES
+   10. BADGES
    ============================================ */
 .badge {
   display: inline-flex;
@@ -863,14 +969,19 @@ table.data tfoot td.num {
 .badge.danger  { background: var(--danger-soft); color: #991b1b; border-color: rgba(239,68,68,.28); }
 .badge.warning { background: var(--warning-soft); color: #92400e; border-color: rgba(245,158,11,.32); }
 .badge.info    { background: var(--info-soft); color: #075985; border-color: rgba(14,165,233,.28); }
+.badge.purple  { background: var(--purple-soft); color: #5b21b6; border-color: rgba(139,92,246,.28); }
+.badge.primary { background: var(--primary-soft); color: var(--primary-d); border-color: rgba(99,102,241,.28); }
 .badge.gray    { background: var(--bg-3); color: var(--text-2); border-color: var(--border); }
+
 [data-theme="dark"] .badge.success { color: #6ee7b7; }
 [data-theme="dark"] .badge.danger  { color: #fca5a5; }
 [data-theme="dark"] .badge.warning { color: #fcd34d; }
 [data-theme="dark"] .badge.info    { color: #7dd3fc; }
+[data-theme="dark"] .badge.purple  { color: #c4b5fd; }
+[data-theme="dark"] .badge.primary { color: #a5b4fc; }
 
 /* ============================================
-   9. MODALS
+   11. MODALS
    ============================================ */
 .modal-backdrop {
   position: fixed;
@@ -966,7 +1077,7 @@ table.data tfoot td.num {
 }
 
 /* ============================================
-   10. FORMS
+   12. FORMS
    ============================================ */
 .form-grid {
   display: grid;
@@ -1047,8 +1158,24 @@ table.data tfoot td.num {
   cursor: pointer;
 }
 
+/* Select Styling */
+.field select,
+.table-toolbar select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%235a6474' d='M6 9L1 4h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: left 14px center;
+  padding-left: 36px;
+  cursor: pointer;
+}
+[data-theme="dark"] .field select,
+[data-theme="dark"] .table-toolbar select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2394a3b8' d='M6 9L1 4h10z'/%3E%3C/svg%3E");
+}
+
 /* ============================================
-   11. EMPTY STATE
+   13. EMPTY STATES
    ============================================ */
 .empty {
   padding: 60px 24px;
@@ -1071,75 +1198,783 @@ table.data tfoot td.num {
 .empty p {
   font-size: 14px;
 }
-/* ============================================
-   🖨️ تحسينات الطباعة
-   ============================================ */
 
+/* ============================================
+   14. AVATAR (Big Version)
+   ============================================ */
+.avatar-big {
+  width: 64px;
+  height: 64px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, var(--primary), var(--purple));
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-weight: 900;
+  font-size: 24px;
+  box-shadow: 0 8px 20px var(--primary-glow);
+  flex-shrink: 0;
+}
+
+/* ============================================
+   15. PROGRESS BARS
+   ============================================ */
+.progress {
+  height: 8px;
+  background: var(--bg-3);
+  border-radius: 999px;
+  overflow: hidden;
+  position: relative;
+}
+.progress > div {
+  height: 100%;
+  background: linear-gradient(90deg, var(--primary), var(--purple));
+  border-radius: 999px;
+  transition: width 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.progress.success > div { background: linear-gradient(90deg, var(--success), var(--success-h)); }
+.progress.danger > div { background: linear-gradient(90deg, var(--danger), var(--danger-h)); }
+.progress.warning > div { background: linear-gradient(90deg, var(--warning), var(--warning-h)); }
+
+/* ============================================
+   16. TABS
+   ============================================ */
+.tabs {
+  display: flex;
+  gap: 6px;
+  padding: 4px;
+  background: var(--bg-3);
+  border-radius: 12px;
+  margin-bottom: 20px;
+  overflow-x: auto;
+}
+.tabs::-webkit-scrollbar { display: none; }
+.tab {
+  padding: 10px 18px;
+  border-radius: 10px;
+  font-size: 13.5px;
+  font-weight: 800;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: all var(--t);
+  white-space: nowrap;
+  flex-shrink: 0;
+  background: none;
+  border: none;
+}
+.tab:hover { color: var(--text); }
+.tab.active {
+  background: var(--bg-2);
+  color: var(--primary);
+  box-shadow: var(--sh-sm);
+}
+
+/* ============================================
+   17. DIVIDERS
+   ============================================ */
+.divider {
+  height: 1px;
+  background: var(--border);
+  margin: 20px 0;
+  border: none;
+}
+.divider-lg {
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--border-2), transparent);
+  margin: 28px 0;
+  border: none;
+}
+
+/* ============================================
+   18. UTILITY CLASSES
+   ============================================ */
+.flex { display: flex; }
+.flex-col { flex-direction: column; }
+.items-center { align-items: center; }
+.items-start { align-items: flex-start; }
+.items-end { align-items: flex-end; }
+.justify-between { justify-content: space-between; }
+.justify-center { justify-content: center; }
+.gap-1 { gap: 4px; }
+.gap-2 { gap: 8px; }
+.gap-3 { gap: 12px; }
+.gap-4 { gap: 16px; }
+
+.mt-1 { margin-top: 4px; }
+.mt-2 { margin-top: 8px; }
+.mt-3 { margin-top: 12px; }
+.mt-4 { margin-top: 16px; }
+.mt-6 { margin-top: 24px; }
+.mb-1 { margin-bottom: 4px; }
+.mb-2 { margin-bottom: 8px; }
+.mb-3 { margin-bottom: 12px; }
+.mb-4 { margin-bottom: 16px; }
+.mb-6 { margin-bottom: 24px; }
+
+.text-center { text-align: center; }
+.text-right { text-align: right; }
+.text-left { text-align: left; }
+.text-sm { font-size: 12px; }
+.text-lg { font-size: 18px; }
+.font-bold { font-weight: 800; }
+.font-black { font-weight: 900; }
+
+.text-primary { color: var(--primary); }
+.text-success { color: var(--success); }
+.text-danger { color: var(--danger); }
+.text-warning { color: var(--warning); }
+.text-info { color: var(--info); }
+.text-purple { color: var(--purple); }
+.text-muted { color: var(--text-2); }
+.text-soft { color: var(--text-3); }
+
+.bg-primary { background: var(--primary); }
+.bg-success { background: var(--success); }
+.bg-danger { background: var(--danger); }
+.bg-warning { background: var(--warning); }
+.bg-info { background: var(--info); }
+.bg-purple { background: var(--purple); }
+
+.w-full { width: 100%; }
+.h-full { height: 100%; }
+
+.hidden { display: none !important; }
+.visible { visibility: visible; }
+
+/* ============================================
+   19. PRINT STYLES — طباعة احترافية
+   ============================================ */
 @media print {
   @page {
     size: A4 portrait;
     margin: 8mm;
   }
   
-  body {
-    background: #fff !important;
-    padding: 0 !important;
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
   }
   
+  html, body {
+    background: #fff !important;
+    color: #000 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    font-size: 11pt;
+  }
+  
+  /* إخفاء العناصر غير الضرورية */
   .sidebar,
   .topbar,
+  .overlay,
   .page-actions,
   .btn,
+  .btn-icon,
   .modal-header,
   .modal-footer,
   .table-toolbar,
-  .overlay {
+  .no-print,
+  #toast-container,
+  .nav-item,
+  .page-header,
+  .empty .ico {
     display: none !important;
+  }
+  
+  .app {
+    display: block !important;
   }
   
   .main {
     margin-right: 0 !important;
     max-width: 100% !important;
+    padding: 0 !important;
   }
   
   .page {
     padding: 0 !important;
+    animation: none !important;
   }
   
+  /* إظهار المودال فقط عند الطباعة */
   .modal-backdrop {
     position: static !important;
     background: none !important;
     padding: 0 !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    display: block !important;
+    overflow: visible !important;
   }
   
   .modal {
     box-shadow: none !important;
     border: none !important;
+    border-radius: 0 !important;
     max-height: none !important;
     max-width: 100% !important;
+    overflow: visible !important;
+    animation: none !important;
   }
   
   .modal-body {
     padding: 0 !important;
+    overflow: visible !important;
   }
   
+  /* الجداول في الطباعة */
   table {
     page-break-inside: auto;
+    width: 100% !important;
+    border-collapse: collapse !important;
+    font-size: 9pt;
   }
   
-  thead {
-    display: table-header-group;
+  table thead {
+    display: table-header-group !important;
+    background: #6366f1 !important;
+    color: #fff !important;
   }
   
-  tfoot {
-    display: table-footer-group;
+  table tfoot {
+    display: table-footer-group !important;
   }
   
   tr {
-    page-break-inside: avoid;
+    page-break-inside: avoid !important;
+    page-break-after: auto;
   }
   
+  thead th {
+    background: #6366f1 !important;
+    color: #fff !important;
+    border: 1px solid #4338ca !important;
+    padding: 6px 8px !important;
+    font-size: 9pt !important;
+  }
+  
+  tbody td {
+    border: 1px solid #999 !important;
+    padding: 5px 8px !important;
+    font-size: 9pt !important;
+  }
+  
+  /* منطقة الطباعة */
   #printArea {
     max-width: 100% !important;
+    padding: 0 !important;
+    background: #fff !important;
+  }
+  
+  /* رأس الوثيقة */
+  #printArea h1 {
+    font-size: 18pt !important;
+    color: #4338ca !important;
+  }
+  
+  #printArea h2 {
+    font-size: 13pt !important;
+  }
+  
+  #printArea h3 {
+    font-size: 11pt !important;
+  }
+  
+  /* إخفاء الروابط */
+  a { color: inherit !important; text-decoration: none !important; }
+  a[href]::after { content: "" !important; }
+  
+  /* الألوان في الطباعة */
+  .badge {
+    border: 1px solid currentColor !important;
+    background: transparent !important;
+  }
+  
+  /* إزالة الخلفيات الرمادية */
+  .card, .stat, .table-wrap {
+    box-shadow: none !important;
+    border: 1px solid #ccc !important;
+  }
+  
+  /* إضافة رأس وتذييل للصفحة */
+  body::after {
+    content: "© " attr(data-year) " مصنع الصندل";
+    display: block;
+    text-align: center;
+    font-size: 9pt;
+    color: #888;
+    margin-top: 20pt;
+    padding-top: 8pt;
+    border-top: 1px solid #ddd;
   }
 }
+
+/* ============================================
+   20. ANIMATIONS
+   ============================================ */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes slideInRight {
+  from { transform: translateX(30px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes slideInLeft {
+  from { transform: translateX(-30px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes scaleIn {
+  from { transform: scale(0.9); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-6px); }
+  75% { transform: translateX(6px); }
+}
+
+@keyframes shimmer {
+  0% { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+
+.animate-pulse { animation: pulse 2s ease-in-out infinite; }
+.animate-spin { animation: spin 1s linear infinite; }
+.animate-slide-in-right { animation: slideInRight 0.3s ease-out; }
+.animate-slide-in-left { animation: slideInLeft 0.3s ease-out; }
+.animate-scale-in { animation: scaleIn 0.2s ease-out; }
+.animate-shake { animation: shake 0.4s ease-in-out; }
+
+/* ============================================
+   21. LOADING STATES
+   ============================================ */
+.loading {
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  border: 3px solid var(--bg-3);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.loading-lg {
+  display: block;
+  width: 50px;
+  height: 50px;
+  border: 4px solid var(--bg-3);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin: 40px auto;
+}
+
+.skeleton {
+  background: linear-gradient(90deg, var(--bg-3) 25%, var(--bg-4) 50%, var(--bg-3) 75%);
+  background-size: 400px 100%;
+  animation: shimmer 1.5s infinite linear;
+  border-radius: 8px;
+  height: 16px;
+  margin-bottom: 8px;
+}
+.skeleton.title { height: 24px; width: 60%; }
+.skeleton.text { height: 14px; }
+.skeleton.text.short { width: 40%; }
+
+/* ============================================
+   22. DARK MODE تحسينات إضافية
+   ============================================ */
+[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+[data-theme="dark"] input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: invert(1);
+  cursor: pointer;
+}
+
+[data-theme="dark"] img {
+  filter: brightness(0.9);
+}
+
+[data-theme="dark"] .login-card {
+  background: var(--bg-2);
+}
+[data-theme="dark"] .login-card h2 {
+  color: var(--text);
+}
+[data-theme="dark"] .login-card .muted,
+[data-theme="dark"] .login-card .field span {
+  color: var(--text-2);
+}
+[data-theme="dark"] .login-card .field input {
+  background: var(--bg-3);
+  color: var(--text);
+  border-color: var(--border);
+}
+[data-theme="dark"] .login-card .field input:focus {
+  background: var(--bg-2);
+}
+
+/* ============================================
+   23. ACCESSIBILITY
+   ============================================ */
+/* Focus visible للحقول */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* احترام prefers-reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Skip to content */
+.skip-to-content {
+  position: absolute;
+  top: -100px;
+  right: 20px;
+  background: var(--primary);
+  color: #fff;
+  padding: 12px 20px;
+  border-radius: 0 0 10px 10px;
+  font-weight: 800;
+  z-index: 9999;
+  transition: top var(--t);
+}
+.skip-to-content:focus {
+  top: 0;
+}
+
+/* Screen reader only */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ============================================
+   24. RTL Specific Fixes
+   ============================================ */
+[dir="rtl"] input[type="number"] {
+  direction: rtl;
+  text-align: right;
+}
+
+[dir="rtl"] input[type="email"],
+[dir="rtl"] input[type="tel"],
+[dir="rtl"] input[type="url"] {
+  direction: ltr;
+  text-align: right;
+}
+
+[dir="rtl"] input[type="date"] {
+  direction: rtl;
+}
+
+/* الأرقام تحت بعض */
+.num-vertical {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ============================================
+   25. TOOLTIP
+   ============================================ */
+.tooltip {
+  position: relative;
+  display: inline-block;
+}
+.tooltip::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: 100%;
+  right: 50%;
+  transform: translateX(50%);
+  background: var(--text);
+  color: var(--bg-2);
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--t);
+  margin-bottom: 6px;
+  z-index: 100;
+}
+.tooltip:hover::after {
+  opacity: 1;
+}
+
+/* ============================================
+   26. MOBILE RESPONSIVE (Tablets & Phones)
+   ============================================ */
+@media (max-width: 900px) {
+  .grid-3,
+  .grid-4 {
+    grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr));
+  }
+  
+  .modal-footer {
+    flex-direction: column-reverse;
+  }
+  .modal-footer .btn {
+    width: 100%;
+    min-width: 0;
+  }
+}
+
+@media (max-width: 600px) {
+  body { font-size: 14px; }
+  
+  .page { padding: 14px; }
+  
+  .page-header h1 { font-size: 20px; }
+  .page-header p { font-size: 12.5px; }
+  
+  .card { padding: 16px; }
+  
+  .stat { padding: 14px; gap: 10px; }
+  .stat .ico { width: 42px; height: 42px; font-size: 18px; border-radius: 11px; }
+  .stat .value { font-size: 17px; }
+  .stat .label { font-size: 11.5px; }
+  
+  .btn {
+    padding: 10px 16px;
+    font-size: 13px;
+  }
+  .btn-sm { padding: 7px 11px; font-size: 12px; }
+  .btn-lg { padding: 12px 20px; font-size: 14.5px; }
+  .btn-icon { min-width: 38px; height: 38px; padding: 8px 9px; }
+  
+  .table-toolbar {
+    padding: 12px 14px;
+    gap: 8px;
+  }
+  .table-toolbar input,
+  .table-toolbar select {
+    padding: 9px 12px;
+    font-size: 13px;
+  }
+  .table-toolbar .grow { min-width: 100%; }
+  
+  table.data { font-size: 12px; }
+  table.data thead th,
+  table.data tbody td {
+    padding: 10px 8px;
+  }
+  
+  .modal-backdrop {
+    padding: 10px;
+    align-items: flex-end;
+  }
+  .modal {
+    max-width: 100%;
+    max-height: 92vh;
+    border-radius: 20px 20px 0 0;
+  }
+  .modal-header {
+    padding: 16px 18px;
+    border-radius: 20px 20px 0 0;
+  }
+  .modal-header h3 { font-size: 16px; }
+  .modal-body { padding: 18px; }
+  .modal-footer {
+    padding: 14px 18px;
+    border-radius: 0;
+  }
+  
+  .form-grid { grid-template-columns: 1fr; gap: 12px; }
+  .field input,
+  .field select,
+  .field textarea {
+    padding: 10px 12px;
+    font-size: 13.5px;
+  }
+  
+  #toast-container {
+    top: auto;
+    bottom: 10px;
+    left: 10px;
+    right: 10px;
+    max-width: none;
+  }
+  .toast {
+    padding: 12px 16px;
+    font-size: 13px;
+  }
+  
+  .login-card { padding: 26px 22px; }
+  .login-card h2 { font-size: 20px; }
+  .login-brand h1 { font-size: 24px; }
+  .login-brand .brand-icon { font-size: 60px; }
+}
+
+@media (max-width: 380px) {
+  .page { padding: 10px; }
+  .card { padding: 12px; }
+  .stat { padding: 12px; gap: 8px; }
+  .stat .ico { width: 36px; height: 36px; font-size: 16px; }
+  .stat .value { font-size: 15px; }
+  .btn { padding: 9px 13px; font-size: 12.5px; }
+}
+
+/* ============================================
+   27. HOVER EFFECTS
+   ============================================ */
+.hover-lift {
+  transition: transform var(--t), box-shadow var(--t);
+}
+.hover-lift:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--sh-lg);
+}
+
+.hover-glow {
+  transition: box-shadow var(--t);
+}
+.hover-glow:hover {
+  box-shadow: 0 0 0 4px var(--primary-glow);
+}
+
+/* ============================================
+   28. SECTION HEADERS
+   ============================================ */
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.section-header h2 {
+  font-size: 18px;
+  font-weight: 900;
+  color: var(--text);
+}
+.section-header .subtitle {
+  font-size: 13px;
+  color: var(--text-2);
+  margin-top: 3px;
+  font-weight: 600;
+}
+
+/* ============================================
+   29. NUMBER DISPLAY
+   ============================================ */
+.num-display {
+  font-variant-numeric: tabular-nums;
+  font-weight: 900;
+  letter-spacing: -0.4px;
+  color: var(--text);
+}
+.num-display.success { color: var(--success); }
+.num-display.danger { color: var(--danger); }
+.num-display.warning { color: var(--warning); }
+.num-display.info { color: var(--info); }
+.num-display.primary { color: var(--primary); }
+
+/* ============================================
+   30. HEADER ACCENTS
+   ============================================ */
+.header-gradient {
+  background: linear-gradient(135deg, var(--primary-soft), var(--purple-soft));
+  border-radius: var(--r-lg);
+  padding: 20px;
+  margin-bottom: 20px;
+  border: 1px solid var(--border);
+}
+
+.header-gradient.success {
+  background: linear-gradient(135deg, var(--success-soft), #a7f3d0);
+}
+.header-gradient.danger {
+  background: linear-gradient(135deg, var(--danger-soft), #fecaca);
+}
+.header-gradient.warning {
+  background: linear-gradient(135deg, var(--warning-soft), #fde68a);
+}
+
+/* ============================================
+   31. STATUS INDICATORS
+   ============================================ */
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.status-dot.online { background: var(--success); box-shadow: 0 0 0 3px var(--success-soft); }
+.status-dot.offline { background: var(--text-3); }
+.status-dot.warning { background: var(--warning); box-shadow: 0 0 0 3px var(--warning-soft); }
+.status-dot.danger { background: var(--danger); box-shadow: 0 0 0 3px var(--danger-soft); animation: pulse 2s infinite; }
+
+/* ============================================
+   32. FINAL FIXES
+   ============================================ */
+/* منع التمرير الأفقي */
+body, html {
+  overflow-x: hidden;
+}
+
+/* تحسين عرض النص العربي */
+body {
+  font-feature-settings: "kern" 1, "liga" 1;
+  text-rendering: optimizeLegibility;
+}
+
+/* منع تحديد النص في الأزرار */
+.btn, .nav-item, .tab, .badge {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* تحسين الروابط */
+a:hover {
+  color: var(--primary);
+}
+
+/* تحسين الـ textarea */
+textarea {
+  font-family: inherit;
+  line-height: 1.6;
+}
+
+/* ============================================
+   ✅ نهاية ملف CSS
+   ============================================ */
