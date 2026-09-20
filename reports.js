@@ -1,12 +1,9 @@
 // ============================================
-// 🏭 مصنع الصندل - Reports Module (الإصدار 3.1)
+// 🏭 مصنع الصندل - Reports Module (الإصدار 3.3)
+// مع دعم الشعار والراتب الأسبوعي
 // ============================================
 
 const Reports = {
-  
-  // ============================================
-  // الواجهة الرئيسية
-  // ============================================
   async render() {
     const today = new Date().toISOString().slice(0, 10);
     const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10);
@@ -102,9 +99,6 @@ const Reports = {
     this.generate();
   },
 
-  // ============================================
-  // التقرير العام
-  // ============================================
   async generate() {
     const from = $('#repFrom').value;
     const to = $('#repTo').value;
@@ -120,9 +114,7 @@ const Reports = {
       .lte('end_date', to)
       .order('start_date', { ascending: false });
     if (deptId) q = q.eq('department_id', deptId);
-    if (!Auth.isAdmin() && Auth.currentProfile?.department_id) {
-      q = q.eq('department_id', Auth.currentProfile.department_id);
-    }
+    if (!Auth.isAdmin() && Auth.currentProfile?.department_id) q = q.eq('department_id', Auth.currentProfile.department_id);
     
     const { data: files } = await q;
     if (!files?.length) {
@@ -189,7 +181,7 @@ const Reports = {
   },
 
   // ============================================
-  // ✅ الطباعة الاحترافية مع تفصيل الحضور والغياب
+  // ✅ الطباعة الاحترافية مع الشعار
   // ============================================
   async payrollFile(id) {
     const { data: file } = await sb.from('payroll_files').select('*, departments(name)').eq('id', id).single();
@@ -246,9 +238,6 @@ const Reports = {
     window._printPayrollDedMap = dedMap;
   },
 
-  // ============================================
-  // معاينة الطباعة
-  // ============================================
   async renderPrint(id, paperSize) {
     Modal.close();
     setTimeout(async () => {
@@ -286,7 +275,15 @@ const Reports = {
       const factoryName = Cache.getSetting('factory_name', 'مصنع الصندل');
       const factoryPhone = Cache.getSetting('factory_phone', '');
       const factoryAddress = Cache.getSetting('factory_address', '');
+      const logoUrl = Cache.getSetting('factory_logo_url', '').trim();
       const days = file.period_days || Math.ceil((new Date(file.end_date) - new Date(file.start_date)) / 86400000) + 1;
+      
+      // ✅ حساب المسار الكامل للشعار
+      let fullLogoUrl = logoUrl;
+      if (logoUrl && !logoUrl.startsWith('http') && !logoUrl.startsWith('data:')) {
+        const basePath = window.location.pathname.replace(/\/[^\/]*$/, '');
+        fullLogoUrl = basePath + '/' + logoUrl.replace(/^\//, '');
+      }
       
       const isA3 = paperSize === 'A3';
       const fontSize = isA3 ? '11px' : '9px';
@@ -398,11 +395,16 @@ const Reports = {
           </div>
         `).join('') || `<div style="text-align:center;color:#999;padding:8px;font-size:${fontSize}">لا توجد</div>`;
       
+      // ✅ HTML الشعار
+      const logoHtml = fullLogoUrl 
+        ? `<img src="${fullLogoUrl}" style="width:${isA3 ? '90px' : '70px'};height:${isA3 ? '90px' : '70px'};object-fit:contain;margin:0 auto 6px;display:block" alt="logo">`
+        : `<div style="font-size:${isA3 ? '36px' : '30px'};margin-bottom:2px">🏭</div>`;
+      
       const html = `
         <div id="printArea" style="direction:rtl;font-family:Cairo,sans-serif;padding:14px;background:#fff;color:#111">
           
           <div style="text-align:center;margin-bottom:14px;border-bottom:3px solid #6366f1;padding-bottom:10px">
-            <div style="font-size:${isA3 ? '36px' : '30px'};margin-bottom:2px">🏭</div>
+            ${logoHtml}
             <h1 style="margin:0;color:#4338ca;font-size:${isA3 ? '24px' : '20px'};font-weight:900">${esc(factoryName)}</h1>
             ${factoryPhone || factoryAddress ? `
               <div style="font-size:${fontSize};color:#666">
@@ -545,7 +547,7 @@ const Reports = {
   },
 
   // ============================================
-  // الطباعة الفعلية
+  // طباعة
   // ============================================
   print(paperSize = 'A4') {
     const content = $('#printArea')?.innerHTML;
@@ -565,6 +567,7 @@ const Reports = {
         thead { display: table-header-group; }
         tfoot { display: table-footer-group; }
         tr { page-break-inside: avoid; }
+        img { max-width: 100%; }
         @media print {
           @page { size: ${size} portrait; margin: 8mm; }
           body { padding: 0; }
@@ -576,7 +579,7 @@ const Reports = {
   },
 
   // ============================================
-  // كشف حساب موظف
+  // كشف الموظف
   // ============================================
   async employeeStatement(id) {
     const { data: e } = await sb.from('employees').select('*, departments(name), employee_types(name)').eq('id', id).single();
@@ -592,15 +595,25 @@ const Reports = {
     const totalLoans = (loans || []).reduce((s, l) => s + Number(l.total_amount || 0), 0);
     const remLoans = (loans || []).reduce((s, l) => s + Number(l.remaining_amount || 0), 0);
     const factoryName = Cache.getSetting('factory_name', 'مصنع الصندل');
+    const logoUrl = Cache.getSetting('factory_logo_url', '').trim();
+    
+    let fullLogoUrl = logoUrl;
+    if (logoUrl && !logoUrl.startsWith('http') && !logoUrl.startsWith('data:')) {
+      const basePath = window.location.pathname.replace(/\/[^\/]*$/, '');
+      fullLogoUrl = basePath + '/' + logoUrl.replace(/^\//, '');
+    }
+    
+    const logoHtml = fullLogoUrl 
+      ? `<img src="${fullLogoUrl}" style="width:80px;height:80px;object-fit:contain;margin:0 auto 8px;display:block" alt="logo">`
+      : `<div style="font-size:40px">🏭</div>`;
     
     const html = `
       <div id="printArea" style="direction:rtl;font-family:Cairo,sans-serif;padding:20px;background:#fff;color:#111">
         <div style="text-align:center;border-bottom:3px solid #6366f1;padding-bottom:14px;margin-bottom:20px">
-          <div style="font-size:40px">🏭</div>
+          ${logoHtml}
           <h1 style="margin:6px 0;color:#4338ca">${esc(factoryName)}</h1>
           <h2 style="margin:6px 0;color:#333">كشف حساب موظف</h2>
         </div>
-        
         <div style="background:linear-gradient(135deg,#eef2ff,#f5f3ff);border-radius:12px;padding:18px;margin-bottom:20px">
           <table style="width:100%;font-size:13px;border-collapse:collapse">
             <tr>
@@ -611,15 +624,10 @@ const Reports = {
             <tr>
               <td style="padding:6px"><b>المسمى:</b> ${esc(e.job_title || '-')}</td>
               <td style="padding:6px"><b>الأساسي:</b> ${fmt(e.base_salary, e.currency)}</td>
-              <td style="padding:6px"><b>نوع الراتب:</b> ${e.salary_type === 'daily' ? '📆 يومي' : '📅 شهري'}</td>
-            </tr>
-            <tr>
               <td style="padding:6px"><b>التعيين:</b> ${fmtDate(e.hire_date)}</td>
-              <td style="padding:6px" colspan="2"><b>الحالة:</b> ${e.status === 'active' ? '✅ نشط' : '🚫 منتهي'}</td>
             </tr>
           </table>
         </div>
-        
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px">
           <div style="background:#d1fae5;padding:14px;border-radius:10px;text-align:center">
             <div style="font-size:11px;color:#065f46;font-weight:700">حضور</div>
@@ -638,7 +646,6 @@ const Reports = {
             <div style="font-size:22px;font-weight:900;color:#991b1b">${e.warnings_count || 0}</div>
           </div>
         </div>
-        
         <h3 style="color:#4338ca">💵 الرواتب (${(pays || []).length})</h3>
         <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:20px">
           <thead>
@@ -658,7 +665,6 @@ const Reports = {
             </tr>`).join('') : '<tr><td colspan="4" style="text-align:center;padding:12px;color:#999">لا يوجد</td></tr>'}
           </tbody>
         </table>
-        
         <h3 style="color:#92400e">💳 السلف (${(loans || []).length})</h3>
         <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:20px">
           <thead>
@@ -678,27 +684,8 @@ const Reports = {
             </tr>`).join('') : '<tr><td colspan="4" style="text-align:center;padding:12px;color:#999">لا يوجد</td></tr>'}
           </tbody>
         </table>
-        
-        <h3 style="color:#dc2626">🚨 الإنذارات (${(warns || []).length})</h3>
-        <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:20px">
-          <thead>
-            <tr style="background:#fee2e2">
-              <th style="border:1px solid #ddd;padding:8px;text-align:right">التاريخ</th>
-              <th style="border:1px solid #ddd;padding:8px;text-align:right">السبب</th>
-              <th style="border:1px solid #ddd;padding:8px;text-align:right">الحالة</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${(warns || []).length ? (warns || []).map(w => `<tr>
-              <td style="border:1px solid #e5e7eb;padding:7px">${fmtDate(w.warning_date)}</td>
-              <td style="border:1px solid #e5e7eb;padding:7px">${esc(w.description || w.reason)}</td>
-              <td style="border:1px solid #e5e7eb;padding:7px">${w.is_active ? 'نشط' : 'ملغى'}</td>
-            </tr>`).join('') : '<tr><td colspan="3" style="text-align:center;padding:12px;color:#999">لا يوجد</td></tr>'}
-          </tbody>
-        </table>
-        
         <div style="background:linear-gradient(135deg,#f0fdf4,#ecfdf5);padding:18px;border-radius:12px;border-right:5px solid #10b981">
-          <b style="font-size:15px;color:#065f46">📊 الملخص المالي</b><br><br>
+          <b style="font-size:15px;color:#065f46">📊 الملخص</b><br><br>
           <div style="display:flex;justify-content:space-between;padding:6px 0"><span>إجمالي المستلم:</span><b>${fmt(totalReceived, e.currency)}</b></div>
           <div style="display:flex;justify-content:space-between;padding:6px 0"><span>إجمالي السلف:</span><b>${fmt(totalLoans, e.currency)}</b></div>
           <div style="display:flex;justify-content:space-between;padding:6px 0;color:#991b1b"><span>المتبقي من السلف:</span><b>${fmt(remLoans, e.currency)}</b></div>
@@ -711,9 +698,6 @@ const Reports = {
     `, { size: 'lg' });
   },
 
-  // ============================================
-  // تصدير Excel
-  // ============================================
   async exportExcel(title, headers, rows) {
     let csv = '\uFEFF' + headers.join(',') + '\n';
     rows.forEach(r => {
@@ -729,3 +713,7 @@ const Reports = {
     toast('✅ تم تصدير Excel');
   }
 };
+
+// ============================================
+// ✅ نهاية reports.js
+// ============================================

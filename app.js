@@ -1,6 +1,6 @@
 // ============================================
-// 🏭 مصنع الصندل - Main App (الإصدار 3.2)
-// الجزء 1: الأساسيات + الموظفون + الأقسام + الحضور
+// 🏭 مصنع الصندل - Main App (الإصدار 3.3)
+// الجزء 1: الأساسيات + الشعار + الموظفون + الأقسام + الحضور
 // ============================================
 
 const $ = (sel, root=document) => root.querySelector(sel);
@@ -41,6 +41,67 @@ function getWarningLevel(count, max = 3) {
   if (count >= max) return { level: 'max', color: 'danger', icon: '🔴', label: 'إنذار نهائي' };
   if (count >= max - 1) return { level: 'high', color: 'warning', icon: '🟠', label: 'تحذير كتابي' };
   return { level: 'low', color: 'warning', icon: '🟡', label: 'تحذير شفهي' };
+}
+
+// ============================================
+// ✅ تحديث الشعار واسم المصنع
+// ============================================
+function updateBrandUI() {
+  const logoUrlRaw = Cache.getSetting('factory_logo_url', '');
+  const logoUrl = (logoUrlRaw || '').trim();
+  const factoryName = (Cache.getSetting('factory_name', 'مصنع الصندل') || 'مصنع الصندل').trim();
+  
+  console.log('🎨 updateBrandUI:');
+  console.log('   Logo URL (raw):', logoUrl || '(فارغ)');
+  console.log('   Factory Name:', factoryName);
+  
+  // ✅ حساب المسار الكامل إذا كان رابطاً نسبياً
+  let fullUrl = logoUrl;
+  if (logoUrl && !logoUrl.startsWith('http') && !logoUrl.startsWith('data:')) {
+    const basePath = window.location.pathname.replace(/\/[^\/]*$/, '');
+    fullUrl = basePath + '/' + logoUrl.replace(/^\//, '');
+  }
+  
+  console.log('   Full URL:', fullUrl || '(فارغ)');
+  
+  // ✅ الشريط الجانبي
+  const sidebarLogo = document.getElementById('sidebarLogo');
+  const sidebarName = document.getElementById('sidebarFactoryName');
+  
+  if (sidebarLogo) {
+    if (fullUrl) {
+      sidebarLogo.innerHTML = `<img src="${fullUrl}" alt="logo" 
+        style="width:44px;height:44px;border-radius:10px;object-fit:cover;box-shadow:0 4px 12px rgba(0,0,0,.15);display:block"
+        onerror="this.onerror=null; this.parentElement.innerHTML='🏭'; this.parentElement.style.fontSize='34px';">`;
+      sidebarLogo.style.fontSize = '0';
+      sidebarLogo.style.display = 'grid';
+      sidebarLogo.style.placeItems = 'center';
+    } else {
+      sidebarLogo.innerHTML = '🏭';
+      sidebarLogo.style.fontSize = '34px';
+      sidebarLogo.style.display = '';
+      sidebarLogo.style.placeItems = '';
+    }
+  }
+  
+  if (sidebarName) {
+    sidebarName.textContent = factoryName;
+  }
+  
+  // ✅ عنوان الصفحة
+  document.title = `${factoryName} — نظام المرتبات`;
+  
+  // ✅ Favicon
+  const favicon = document.getElementById('dynamicFavicon');
+  if (favicon) {
+    if (fullUrl) {
+      favicon.href = fullUrl;
+    } else {
+      favicon.href = 'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏭</text></svg>';
+    }
+  }
+  
+  console.log('   ✅ Brand UI updated');
 }
 
 // ✅ حساب صافي الموظف باستخدام RPC
@@ -571,7 +632,6 @@ const Departments = {
       return;
     }
     
-    // ✅ احسب عدد الموظفين لكل قسم
     const deptIds = data.map(d => d.id);
     const { data: empCounts } = await sb.from('employees').select('department_id').is('deleted_at', null).eq('status', 'active').in('department_id', deptIds);
     const countMap = {};
@@ -665,18 +725,42 @@ const Attendance = {
       <form id="attForm">
         <label class="field"><span>الاسم *</span><input name="name" required></label>
         <div class="form-grid">
-          <label class="field"><span>من</span><input type="date" name="start_date" required></label>
-          <label class="field"><span>إلى</span><input type="date" name="end_date" required></label>
+          <label class="field"><span>من *</span><input type="date" name="start_date" required></label>
+          <label class="field"><span>إلى *</span><input type="date" name="end_date" required></label>
         </div>
         <label class="field"><span>القسم *</span><select name="department_id" required><option value="">— اختر —</option>${opts}</select></label>
       </form>`, `<button class="btn btn-ghost" onclick="Modal.close()">إلغاء</button><button class="btn btn-primary" id="saveAtt">💾 إنشاء</button>`);
     
     $('#saveAtt').onclick = async () => {
-      const fd = new FormData($('#attForm'));
+      const form = $('#attForm');
+      if (!form.reportValidity()) return;
+      
+      const fd = new FormData(form);
       const payload = Object.fromEntries(fd.entries());
+      
+      if (!payload.department_id || payload.department_id === '') {
+        return toast('⚠️ اختر القسم أولاً', 'error');
+      }
+      
+      if (new Date(payload.start_date) > new Date(payload.end_date)) {
+        return toast('⚠️ تاريخ البداية بعد النهاية', 'error');
+      }
+      
       payload.created_by = Auth.currentUser.id;
+      
+      const btn = $('#saveAtt');
+      btn.disabled = true;
+      btn.textContent = '⏳ جاري الإنشاء...';
+      
       const res = await sb.from('attendance_files').insert(payload).select().single();
-      if (res.error) return toast('فشل: '+res.error.message, 'error');
+      
+      if (res.error) {
+        toast('❌ فشل: ' + res.error.message, 'error');
+        btn.disabled = false;
+        btn.textContent = '💾 إنشاء';
+        return;
+      }
+      
       toast('✅ تم');
       Modal.close();
       Attendance.load();
@@ -1479,7 +1563,6 @@ const Payroll = {
       <button class="btn btn-purple" onclick="Reports.payrollFile('${id}')">🖨️ طباعة الكل بالتفصيل</button>
     `, {size:'lg'});
     
-    // ✅ ربط البحث
     setTimeout(() => {
       const searchInput = document.getElementById('paySearchInput');
       const counter = document.getElementById('paySearchCounter');
@@ -1672,15 +1755,6 @@ Object.assign(Payroll, {
     Modal.close();
     setTimeout(() => this.details(recordId, fileId), 100);
     toast('✅ تم الحفظ');
-  },
-  
-  async updateAbsenceDeduction(recordId, fileId, newValue) {
-    const value = Number(newValue || 0);
-    await sb.from('payroll_records').update({ absence_deduction: value }).eq('id', recordId);
-    await this.recalcEmployee(recordId, fileId);
-    Modal.close();
-    setTimeout(() => this.details(recordId, fileId), 100);
-    toast('✅ تم تحديث خصم الغياب');
   },
   
   async addEarning(recordId, fileId) {
@@ -1988,6 +2062,7 @@ Object.assign(Payroll, {
     const { data: file } = await sb.from('payroll_files').select('*').eq('id', r.payroll_file_id).single();
     const currency = emp?.currency || 'SDG';
     const factoryName = Cache.getSetting('factory_name', 'مصنع الصندل');
+    const logoUrl = Cache.getSetting('factory_logo_url', '').trim();
     const att = calc.attendance;
     const isDaily = calc.salaryType === 'daily';
     const isWeekly = calc.salaryType === 'weekly';
@@ -2022,10 +2097,14 @@ Object.assign(Payroll, {
     }
     if (!deductionsRows) deductionsRows = `<tr><td colspan="2" style="padding:8px;border:1px solid #ddd;text-align:center;color:#999">لا توجد استقطاعات</td></tr>`;
     
+    const logoHtml = logoUrl 
+      ? `<img src="${logoUrl}" style="width:80px;height:80px;object-fit:contain;margin:0 auto 8px;display:block" alt="logo">`
+      : `<div style="font-size:40px">🏭</div>`;
+    
     const html = `
       <div id="printArea" style="direction:rtl;font-family:Cairo,sans-serif;padding:20px;background:#fff;color:#111;max-width:800px;margin:0 auto">
         <div style="text-align:center;margin-bottom:20px;border-bottom:3px solid #6366f1;padding-bottom:14px">
-          <div style="font-size:40px">🏭</div>
+          ${logoHtml}
           <h1 style="margin:4px 0;color:#4338ca;font-size:22px;font-weight:900">${esc(factoryName)}</h1>
           <h2 style="margin:8px 0;font-size:16px">كشف راتب موظف</h2>
           <div style="font-size:11px;color:#666">📅 ${fmtDate(file.start_date)} — ${fmtDate(file.end_date)}</div>
@@ -2883,6 +2962,8 @@ const Settings = {
     }
     
     const s = Cache.settings || {};
+    const logoUrl = s.factory_logo_url || '';
+    
     $('#pageContent').innerHTML = `
       <div class="page-header"><h1>⚙️ الإعدادات</h1><p>إعدادات المصنع</p></div>
       <div class="grid grid-3">
@@ -2891,7 +2972,21 @@ const Settings = {
           <label class="field"><span>اسم المصنع</span><input id="st_factory_name" value="${esc(s.factory_name||'')}"></label>
           <label class="field"><span>الهاتف</span><input id="st_factory_phone" value="${esc(s.factory_phone||'')}"></label>
           <label class="field"><span>العنوان</span><input id="st_factory_address" value="${esc(s.factory_address||'')}"></label>
-          <label class="field"><span>رابط الشعار</span><input id="st_factory_logo_url" value="${esc(s.factory_logo_url||'')}"></label>
+          <label class="field">
+            <span>رابط الشعار (logo.png أو رابط كامل)</span>
+            <input id="st_factory_logo_url" value="${esc(logoUrl)}" placeholder="مثال: logo.png أو https://...">
+            <div style="font-size:11px;color:var(--text-2);margin-top:4px;padding:6px;background:var(--bg-3);border-radius:6px">
+              💡 ارفع الصورة على GitHub بجانب index.html أو على Supabase Storage
+            </div>
+          </label>
+          ${logoUrl ? `
+            <div style="margin-top:12px;padding:12px;background:var(--bg-3);border-radius:10px;text-align:center">
+              <div style="font-size:11px;color:var(--text-2);font-weight:700;margin-bottom:8px">معاينة الشعار:</div>
+              <img src="${esc(logoUrl)}" style="max-width:120px;max-height:120px;border-radius:10px;box-shadow:var(--sh)" 
+                onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚠️</text></svg>'">
+              <div style="font-size:10px;color:var(--text-3);margin-top:6px">إذا ظهرت ⚠️ → الرابط خطأ</div>
+            </div>
+          ` : ''}
         </div>
         <div class="card">
           <h3 style="margin-bottom:16px">💰 الرواتب</h3>
@@ -2918,12 +3013,24 @@ const Settings = {
     
     $('#saveSettings').onclick = async () => {
       const keys = ['factory_name','factory_phone','factory_address','factory_logo_url','default_month_days','default_week_days','max_warnings','insurance_total','insurance_employee','insurance_company','employee_prefix','receipt_prefix','journal_prefix'];
+      
+      const btn = $('#saveSettings');
+      btn.disabled = true;
+      btn.textContent = '⏳ جاري الحفظ...';
+      
       for (const k of keys) { 
         const el = $('#st_'+k);
         if (el) await sb.from('system_settings').upsert({key:k, value: el.value});
       }
+      
       toast('✅ تم الحفظ');
       await Cache.load();
+      
+      // ✅ تحديث فوري للشعار
+      updateBrandUI();
+      
+      // ✅ إعادة تحميل الإعدادات
+      setTimeout(() => Settings.render(), 300);
     };
     
     $('#resetDataBtn')?.addEventListener('click', () => Settings.confirmReset());
@@ -3249,7 +3356,7 @@ const Router = {
       terminations: Terminations, 
       earnings: Earnings, 
       deductions: Deductions,
-      'attendance-report': AttendanceReport
+      'attendance-report': (typeof AttendanceReport !== 'undefined' ? AttendanceReport : null)
     };
   },
   
@@ -3309,6 +3416,9 @@ const GlobalSearch = {
     if (!profile) return;
     updateUserUI(profile);
     await Cache.load();
+    
+    // ✅ تحديث الشعار بعد تحميل الإعدادات
+    updateBrandUI();
 
     $$('.nav-item[data-page]').forEach(item => {
       item.onclick = () => Router.go(item.dataset.page);
