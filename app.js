@@ -91,65 +91,40 @@ function updateBrandUI() {
   // ✅ عنوان الصفحة
   document.title = `${factoryName} — نظام المرتبات`;
   
-  // ✅ Favicon
-  const favicon = document.getElementById('dynamicFavicon');
-  if (favicon) {
-    if (fullUrl) {
-      favicon.href = fullUrl;
-    } else {
-      favicon.href = 'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏭</text></svg>';
-    }
+  // ============================================
+  // ✅ Favicon (طريقة موثوقة)
+  // ============================================
+  console.log('   🎨 Updating favicon...');
+  
+  // احذف كل الـ favicons القديمة
+  document.querySelectorAll('link[rel="icon"], link[rel="shortcut icon"], link[rel="apple-touch-icon"]').forEach(el => el.remove());
+  
+  if (fullUrl) {
+    // ✅ أيقونة PNG
+    const newFavicon = document.createElement('link');
+    newFavicon.rel = 'icon';
+    newFavicon.type = 'image/png';
+    newFavicon.href = fullUrl + '?v=' + Date.now();
+    document.head.appendChild(newFavicon);
+    
+    // ✅ أيقونة Apple
+    const appleIcon = document.createElement('link');
+    appleIcon.rel = 'apple-touch-icon';
+    appleIcon.href = fullUrl;
+    document.head.appendChild(appleIcon);
+    
+    console.log('   ✅ Favicon set to:', fullUrl);
+  } else {
+    // ✅ أيقونة افتراضية 🏭
+    const defaultFavicon = document.createElement('link');
+    defaultFavicon.rel = 'icon';
+    defaultFavicon.href = 'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏭</text></svg>';
+    document.head.appendChild(defaultFavicon);
+    
+    console.log('   ℹ️ Using default favicon');
   }
   
   console.log('   ✅ Brand UI updated');
-}
-
-// ✅ حساب صافي الموظف باستخدام RPC
-async function calcEmployeeNet(recordId) {
-  const { data, error } = await sb.rpc('calc_employee_payroll', { p_record_id: recordId });
-  
-  if (error || !data?.success) {
-    console.error('Calc error:', error || data?.error);
-    return null;
-  }
-  
-  const [recordRes, earnsRes, dedsRes] = await Promise.all([
-    sb.from('payroll_records').select('*, payroll_files(*)').eq('id', recordId).single(),
-    sb.from('payroll_earnings').select('*, earning_types(name)').eq('payroll_record_id', recordId),
-    sb.from('payroll_deductions').select('*, deduction_types(name)').eq('payroll_record_id', recordId)
-  ]);
-  
-  const r = recordRes.data;
-  const file = r?.payroll_files;
-  
-  return {
-    record: r,
-    file,
-    earnings: earnsRes.data || [],
-    deductions: dedsRes.data || [],
-    earnSum: data.earnings_sum,
-    dedSum: data.deductions_sum,
-    totalEarnings: data.total_earnings,
-    totalDeductions: data.deductions_sum,
-    absenceDeduction: data.absence_deduction,
-    net: data.net_salary,
-    attendance: {
-      presentDays: data.attendance.present,
-      absenceDays: data.attendance.absent,
-      unexcusedDays: data.attendance.unexcused,
-      excusedDays: data.attendance.excused,
-      sickDays: data.attendance.sick,
-      dailyWage: data.attendance.daily_wage
-    },
-    salaryType: data.salary_type
-  };
-}
-
-async function notifyUser(title, message, type='info') {
-  try {
-    if (!Auth.currentUser?.id) return;
-    await sb.from('notifications').insert({ user_id: Auth.currentUser.id, title, message, type });
-  } catch (e) { console.warn('notify failed:', e); }
 }
 
 // ============================================
